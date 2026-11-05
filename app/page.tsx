@@ -4,8 +4,8 @@ import { SiteFooter, SiteHeader } from "@/components/SiteHeader";
 import { HugMark } from "@/components/Wordmark";
 import { CATEGORIES, CATEGORY_INFO } from "@/lib/catalog";
 import { CATEGORY_PHOTO, PHOTOS, type Photo } from "@/lib/photos";
-import { read } from "@/lib/server/store";
-import { capacity } from "@/lib/server/hugs";
+import { publicAvailability } from "@/lib/server/repo";
+import { formatDay } from "@/lib/dates";
 import { VIDEO_PRICE_CENTS, WRITTEN_PRICE_CENTS, formatPrice } from "@/lib/commerce/products";
 
 const VIDEO_PRICE = formatPrice(VIDEO_PRICE_CENTS);
@@ -47,7 +47,7 @@ function CTA({ className = "" }: { className?: string }) {
 }
 
 export default async function Home() {
-  const cap = await read(capacity);
+  const avail = await publicAvailability().catch(() => null);
 
   return (
     <>
@@ -176,10 +176,10 @@ export default async function Home() {
                 <li className="flex gap-3"><HugMark className="mt-1 h-4 w-4 shrink-0 text-blush" />Can’t record it? You’re not charged.</li>
               </ul>
               <p className="mt-8 inline-flex items-center gap-2 rounded-full border border-card/20 px-4 py-2 text-sm text-card/80">
-                <span className={`h-2 w-2 rounded-full ${cap.remaining > 0 ? "bg-[#9fd49a]" : "bg-blush"}`} />
-                {cap.remaining > 0
-                  ? `${cap.remaining} of ${cap.capacity} founder recording slots left today`
-                  : "Today’s recording slots are full — back tomorrow"}
+                <span className={`h-2 w-2 rounded-full ${avail?.next ? "bg-[#9fd49a]" : "bg-blush"}`} />
+                {avail?.next
+                  ? `Next recording day: ${formatDay(avail.next.day, avail.today)} · ${avail.next.remaining} of ${avail.capacity} slots open`
+                  : "Fully booked for now — join the free waitlist"}
               </p>
             </div>
           </div>

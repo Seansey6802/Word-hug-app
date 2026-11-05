@@ -9,14 +9,8 @@ import { Letter, revealDuration } from "./Letter";
 import { VideoPanel } from "./VideoPanel";
 import { forgetHug, markSeen, ownerKeyFor, saveHug, seenLines } from "@/lib/client/my-hugs";
 import { renderHugImage } from "@/lib/client/card-image";
-import type { OwnerVideoView, PublicHug } from "@/lib/types";
-
-type OwnerState = {
-  video: OwnerVideoView | null;
-  photo: { allowForVideo: boolean; expiresAt: string } | null;
-  capacity: { remaining: number; capacity: number; paused: boolean };
-  revisions: number;
-};
+import type { OwnerState, PublicHug } from "@/lib/types";
+import { KeepSafe } from "./KeepSafe";
 
 function useToast() {
   const [msg, setMsg] = useState<string | null>(null);
@@ -77,7 +71,10 @@ export function HugExperience({ initial, isNew }: { initial: PublicHug; isNew: b
     if (res.ok) {
       const o = (await res.json()) as OwnerState;
       setOwner(o);
-      if (o.video) setHug((h) => ({ ...h, video: o.video && o.video.status !== "canceled" ? { status: o.video.status } : null }));
+      setHug((h) => ({ ...h, videoReady: o.video?.status === "ready" }));
+    } else if (res.status === 403) {
+      // This device's key was rotated (e.g. recovered on another device).
+      setOwnerKey(null);
     }
   }, [ownerKey, hug.token]);
 
@@ -88,10 +85,11 @@ export function HugExperience({ initial, isNew }: { initial: PublicHug; isNew: b
   // Gentle polling while a video is in progress.
   useEffect(() => {
     const s = owner?.video?.status;
-    if (s !== "queued" && s !== "recording") return;
+    const active = s === "held" || s === "booked" || s === "recording" || Boolean(owner?.waitlist);
+    if (!active) return;
     const id = setInterval(loadOwner, 15000);
     return () => clearInterval(id);
-  }, [owner?.video?.status, loadOwner]);
+  }, [owner?.video?.status, owner?.waitlist, loadOwner]);
 
   function open() {
     setStage("opening");
@@ -217,7 +215,7 @@ export function HugExperience({ initial, isNew }: { initial: PublicHug; isNew: b
           </motion.div>
         ) : (
           <motion.div key="letter" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="pt-4">
-            {hug.video?.status === "ready" && (
+            {hug.videoReady && (
               <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="mb-6 overflow-hidden rounded-[1.6rem] bg-ink">
                 <video src={`/api/hugs/${hug.token}/video/file`} controls playsInline preload="metadata" className="aspect-[9/16] max-h-[70dvh] w-full bg-ink object-contain" />
                 <p className="px-5 py-3 text-[0.85rem] text-card/75">Recorded by hand for {hug.recipientName || "you"}. Press play.</p>
@@ -268,10 +266,12 @@ export function HugExperience({ initial, isNew }: { initial: PublicHug; isNew: b
                   <VideoPanel
                     token={hug.token}
                     ownerKey={ownerKey!}
-                    video={owner?.video ?? null}
-                    capacity={owner?.capacity ?? null}
+                    state={owner}
                     recipient={hug.forSelf ? "you" : hug.recipientName || "them"}
-                    onChange={loadOwner}
+                    onState={(o) => {
+                      setOwner(o);
+                      setHug((h) => ({ ...h, videoReady: o.video?.status === "ready" }));
+                    }}
                   />
 
                   {!(owner?.video && owner.video.status !== "canceled") && (
@@ -281,6 +281,8 @@ export function HugExperience({ initial, isNew }: { initial: PublicHug; isNew: b
                       </Button>
                     </div>
                   )}
+
+                  {owner && <KeepSafe token={hug.token} ownerKey={ownerKey!} has={owner.hasRecoveryEmail} onSaved={loadOwner} />}
 
                   <details className="group rounded-[1.4rem] border border-line px-5 py-4 text-[0.9rem]">
                     <summary className="flex cursor-pointer list-none items-center justify-between font-medium">

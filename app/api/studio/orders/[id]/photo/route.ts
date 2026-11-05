@@ -1,19 +1,18 @@
 import { isStudio } from "@/lib/server/studio";
-import { openFile, read } from "@/lib/server/store";
-import { streamFile } from "@/lib/server/http";
+import { studioPhotoLink } from "@/lib/server/repo";
+import { fail } from "@/lib/server/http";
 
 export const runtime = "nodejs";
 type Ctx = { params: Promise<{ id: string }> };
 
-/** Only shown to the studio if the customer explicitly allowed it. */
-export async function GET(req: Request, { params }: Ctx) {
-  if (!(await isStudio())) return new Response("Unauthorized", { status: 401 });
-  const { id } = await params;
-  const photo = await read((db) => {
-    const v = db.videos.find((x) => x.id === id);
-    const h = v && db.hugs.find((x) => x.id === v.hugId);
-    return h?.photo?.allowForVideo ? h.photo : null;
-  });
-  if (!photo) return new Response("Not found", { status: 404 });
-  return streamFile(req, () => openFile(photo.file), photo.bytes, photo.mime);
+/** Founder sees a photo only if the customer explicitly allowed it, and only while it's live. */
+export async function GET(_req: Request, { params }: Ctx) {
+  try {
+    if (!(await isStudio())) return new Response("Unauthorized", { status: 401 });
+    const url = await studioPhotoLink((await params).id);
+    if (!url) return new Response("Not found", { status: 404, headers: { "Cache-Control": "no-store" } });
+    return new Response(null, { status: 302, headers: { Location: url, "Cache-Control": "no-store" } });
+  } catch (e) {
+    return fail(e);
+  }
 }

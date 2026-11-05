@@ -2,8 +2,7 @@ import type { Metadata } from "next";
 import { HugExperience } from "@/components/hug/HugExperience";
 import { SiteHeader } from "@/components/SiteHeader";
 import { ButtonLink } from "@/components/Button";
-import { getHugByToken, read } from "@/lib/server/store";
-import { toPublic } from "@/lib/server/hugs";
+import { getPublicHug } from "@/lib/server/repo";
 
 export const dynamic = "force-dynamic";
 
@@ -18,9 +17,9 @@ type Props = { params: Promise<{ token: string }>; searchParams: Promise<{ new?:
 export default async function HugPage({ params, searchParams }: Props) {
   const { token } = await params;
   const { new: isNew } = await searchParams;
-  const hug = await getHugByToken(token);
+  const pub = await getPublicHug(token);
 
-  if (!hug) {
+  if (!pub) {
     return (
       <>
         <SiteHeader />
@@ -35,7 +34,6 @@ export default async function HugPage({ params, searchParams }: Props) {
     );
   }
 
-  const pub = await read((db) => toPublic(db, hug));
   return (
     <>
       <SiteHeader />

@@ -48,6 +48,9 @@ export function SavedList() {
           ))}
         </ul>
       )}
+      <p className="mt-6 text-[0.88rem] text-ink-soft">
+        Switched phones? <Link href="/recover" className="underline underline-offset-4">Recover your hugs by email</Link>.
+      </p>
       {hugs.length > 0 && <p className="mt-4 text-[0.8rem] text-ink-faint">“Hide” only removes it from this device. To delete a hug you made, open it and use Privacy &amp; deletion.</p>}
     </div>
   );

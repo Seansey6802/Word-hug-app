@@ -1,4 +1,4 @@
-import type { Category, Intensity, Occasion, Tone } from "./catalog";
+import type { Category } from "./catalog";
 
 export type HugContent = {
   headline: string;
@@ -7,64 +7,8 @@ export type HugContent = {
   lineIds: string[];
 };
 
-export type PhotoRecord = {
-  file: string; // private storage key, never a public path
-  mime: string;
-  bytes: number;
-  consentAt: string;
-  consentText: string;
-  /** Owner allowed the founder to see the photo when recording a video. */
-  allowForVideo: boolean;
-  expiresAt: string;
-};
-
-export type DemoPayment = {
-  provider: "demo"; // "stripe" later
-  amountCents: number;
-  status: "demo_free" | "demo_authorized" | "demo_refunded";
-};
-
-export type Hug = {
-  id: string;
-  token: string; // private gift-link capability
-  ownerKeyHash: string;
-  createdAt: string;
-  forSelf: boolean;
-  recipientName: string;
-  senderName: string;
-  category: Category;
-  tone: Tone;
-  intensity: Intensity;
-  occasion?: Occasion;
-  interests: string[];
-  seed: number;
-  content: HugContent;
-  revisions: number;
-  photo?: PhotoRecord;
-  payment: DemoPayment;
-  demo?: boolean;
-};
-
-export const VIDEO_STATUSES = ["queued", "recording", "ready", "canceled"] as const;
+export const VIDEO_STATUSES = ["held", "booked", "recording", "ready", "canceled"] as const;
 export type VideoStatus = (typeof VIDEO_STATUSES)[number];
-
-export type VideoOrder = {
-  id: string;
-  hugId: string;
-  createdAt: string;
-  status: VideoStatus;
-  history: { status: VideoStatus; at: string }[];
-  note: string;
-  video?: { file: string; mime: string; bytes: number; uploadedAt: string };
-  payment: DemoPayment;
-  canceledReason?: string;
-  demo?: boolean;
-};
-
-export type StudioSettings = {
-  dailyCapacity: number;
-  paused: boolean;
-};
 
 /** What a gift-link viewer is allowed to see. No owner secrets, no internals. */
 export type PublicHug = {
@@ -76,28 +20,43 @@ export type PublicHug = {
   category: Category;
   content: Omit<HugContent, "lineIds">;
   hasPhoto: boolean;
-  video: { status: VideoStatus } | null;
+  /** Recipients only learn that a video is ready — never queue internals. */
+  videoReady: boolean;
 };
 
 export type OwnerVideoView = {
   id: string;
   status: VideoStatus;
-  createdAt: string;
-  queuePosition: number | null;
+  recordingDay: string; // YYYY-MM-DD in the studio's timezone
+  holdExpiresAt: string | null;
+  positionInDay: number | null;
   note: string;
-  canceledReason?: string;
+  canceledReason: string | null;
+};
+
+export type OwnerState = {
+  video: OwnerVideoView | null;
+  waitlist: { status: "waiting" | "offered"; joinedAt: string } | null;
+  nextAvailable: { day: string; remaining: number } | null;
+  paused: boolean;
+  today: string;
+  photo: { allowForVideo: boolean; expiresAt: string } | null;
+  revisions: number;
+  hasRecoveryEmail: boolean;
 };
 
 export type StudioOrder = {
   id: string;
   createdAt: string;
-  status: "queued" | "recording" | "ready" | "canceled";
-  history: { status: string; at: string }[];
+  recordingDay: string;
+  status: VideoStatus;
+  holdExpiresAt: string | null;
+  history: { status: string; at: string; actor: string }[];
   note: string;
   demo: boolean;
   amountCents: number;
   paymentStatus: string;
-  canceledReason?: string;
+  canceledReason: string | null;
   hasVideo: boolean;
   hug: {
     token: string;
@@ -111,5 +70,7 @@ export type StudioOrder = {
     headline: string;
     paragraphs: string[];
     photoForVideo: boolean;
-  } | null;
+  };
 };
+
+export type StudioDay = { day: string; capacity: number; used: number; closed: boolean };

@@ -4,27 +4,35 @@
 
 A mobile-first prototype for personalized compliments, pep talks, loving roasts, cheesy pickup lines, and $15 personalized videos recorded by the founder.
 
-**Prototype status:** local-only. Uses fictional demo data. No real payments, no paid APIs, not deployed.
+**Status:** M2 (Supabase database + private media) on `dev/m2-supabase`. Local-only, fictional demo data, no real payments, not deployed. See [docs/M2-REVIEW.md](docs/M2-REVIEW.md) for test results, risks, costs and open decisions.
 
 ## Run it
 
+Requires Docker (for the local Supabase stack) and Node 22.
+
 ```bash
 npm install
-npm run dev            # http://localhost:3000
-npm run dev:phone      # also reachable from your iPhone on the same Wi-Fi
+cp .env.example .env.local   # then paste SUPABASE_SERVICE_ROLE_KEY from `npx supabase status`
+npm run db:start             # local Supabase: Postgres, Storage, Auth, Mailpit
+npm run db:reset             # apply migrations + seed fictional demo bookings
+npm run dev                  # http://localhost:3000
+npm run dev:phone            # also reachable from your iPhone on the same Wi-Fi
 ```
 
 ### On an iPhone
 
 1. Run `npm run dev:phone` on your computer.
 2. Find your computer's local IP address (macOS: System Settings → Wi-Fi → Details).
-3. On the iPhone, open `http://<that-ip>:3000` in Safari. Optional: Share → Add to Home Screen.
+3. In `.env.local`, set `SUPABASE_PUBLIC_URL=http://<that-ip>:54321` so photo and video links work on the phone.
+4. On the iPhone, open `http://<that-ip>:3000` in Safari. Optional: Share → Add to Home Screen.
 
 Clipboard access, the share sheet, and "Save image" all work over a plain LAN address in dev. Some browsers only allow `navigator.share` on HTTPS. If yours doesn't, the app falls back to copying.
 
 ### Founder studio
 
-Open `/studio`. The prototype passcode is `demo-studio`; set your own with `STUDIO_PASSCODE` in `.env.local`. On a phone, "Upload recording" can open the front camera directly.
+Open `/studio`. The local passcode is `demo-studio` (refused on any non-localhost deployment). The studio shows bookings grouped by recording day, per-day capacity, closed days and the waitlist. On a phone, "Upload recording" can open the front camera; the file goes straight to private storage through a single-use signed link.
+
+Recovery emails sent locally land in Mailpit at http://127.0.0.1:54324 (nothing is actually delivered).
 
 ## What's inside
 
@@ -37,7 +45,10 @@ Open `/studio`. The prototype passcode is `demo-studio`; set your own with `STUD
 | Studio queue, capacity, uploads | `app/studio/*`, `app/api/studio/*` |
 | Writing engine and line library | `lib/composer/*` |
 | Future commerce (products, Stripe boundary) | `lib/commerce/*`, `app/pricing` |
-| Database schema (Supabase, not applied) | `supabase/migrations/0001_init.sql` |
+| Database schema, RLS, booking engine, buckets | `supabase/migrations/*.sql` |
+| Data access (Postgres + private Storage) | `lib/server/repo.ts`, `lib/server/db.ts`, `lib/server/media.ts` |
+| Ownership recovery | `app/recover`, `app/api/recovery/*`, `components/hug/KeepSafe.tsx` |
+| Hourly maintenance (photo expiry, orphans, holds) | `app/api/cron/maintenance` |
 
 ### Pricing (prototype, demo-only)
 
@@ -58,23 +69,26 @@ Hugs are assembled from an original, hand-written line library: an opener, body 
 
 ### Honesty and privacy rules, enforced in code
 
-- **A video is "ready" only after a real file is uploaded.** The studio API refuses to set `ready` manually. `effectiveStatus()` downgrades a "ready" order with no file. The SQL schema adds a `CHECK` constraint for the same rule.
-- **Daily capacity.** The founder sets it in the studio and can pause orders. Customers see the real number of slots left.
+- **A video is "ready" only after a real file is uploaded.** The API refuses "ready" as a status change. The database also refuses it, through a `CHECK` constraint plus a trigger that requires the object to exist in private storage (even a superuser can't bypass it).
+- **Capacity: 5 per recording day, enforced in the database.** Bookings take a row lock on the day, so concurrent requests can't overbook. Customers book the **next available day**; when everything is full they can join a **free waitlist**. A freed slot is held for the oldest waiter for 24 hours.
+- **Data access.** All tables live in a private `app` schema with forced row-level security. The app connects as a least-privilege role. Public API keys can see nothing.
 - **Gift links** use 128-bit random tokens, with `noindex` and `no-referrer`. A different key, kept only on the creator's device, controls editing and deletion.
-- **Photos** need explicit consent. They are re-encoded on the device to strip EXIF and GPS data, stored outside `public/`, never analyzed, deleted automatically after 30 days, and deletable at any time. The founder sees a photo only if the customer opted in.
+- **Photos** need explicit consent, which is stored with its wording and version. They are re-encoded on the device to strip EXIF and GPS data, kept in a private bucket and served only through 10-minute signed links. They are never analyzed. They stop being visible the moment they expire (30 days), and the hourly job deletes the file. Owners can delete them at any time. The founder sees a photo only if the customer opted in.
+- **Ownership** is a key held on the creator's device (stored only as a hash). An optional recovery email sends a single-use, 30-minute link, which rotates the keys so a lost device loses control.
 - **Payments** go through a demo provider that records intended amounts only. `PAYMENTS_MODE` must be `demo`.
-
-### Storage
-
-The prototype stores everything in `./.data/` (git-ignored). Delete that folder to reset; the demo data is re-seeded on the next start. This will **not** work on Vercel's serverless file system. Production needs the Supabase adapter, which is a planned next step.
 
 ## Tests
 
 ```bash
-npm test           # composer unit tests
+npm test             # unit: composer, pricing
+npm run test:db      # database: RLS, privileges, consent, concurrency, waitlist, storage
+npm run build && npm start   # then, in another terminal:
+npm run test:api     # API security & functional tests
+npm run test:e2e     # iPhone 13 end-to-end (Playwright)
 npm run typecheck
-npm run build
 ```
+
+Test suites only run against `localhost` and wipe local data; run `npm run db:reset` afterwards to restore the demo bookings.
 
 ## Photography
 
@@ -82,7 +96,7 @@ Photos are from Unsplash (8 people/stationery, 2 animals), used under the Unspla
 
 ## Next milestones (pending approval)
 
-1. Supabase adapter and private storage buckets (signed URLs).
-2. Stripe Checkout: $1 written hugs; $15 founder videos with manual capture, charged only after upload.
-3. Email or SMS notification when a video is ready.
-4. Written-hug bundles. (Subscriptions deferred.)
+1. Hosted private beta on a real Supabase project (decisions and credentials listed in docs/M2-REVIEW.md).
+2. Stripe Checkout: $1 written hugs; $15 founder videos charged only after upload. Note that card authorizations expire after about 7 days.
+3. Email notifications: "a slot opened" and "your video is ready".
+4. Founder login via Supabase Auth + MFA.

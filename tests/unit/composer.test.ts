@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { compose } from "../lib/composer/index.ts";
-import { CATEGORIES, TONES, OCCASIONS } from "../lib/catalog.ts";
+import { compose } from "../../lib/composer/index.ts";
+import { CATEGORIES, TONES, OCCASIONS } from "../../lib/catalog.ts";
 
 test("composes for every category/tone/intensity", () => {
   for (const category of CATEGORIES)

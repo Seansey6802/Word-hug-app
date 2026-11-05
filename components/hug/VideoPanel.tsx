@@ -3,15 +3,14 @@
 import { useState } from "react";
 import { Button } from "@/components/Button";
 import { HugMark } from "@/components/Wordmark";
-import type { OwnerVideoView } from "@/lib/types";
+import type { OwnerState, OwnerVideoView } from "@/lib/types";
 import { VIDEO_PRICE_CENTS, formatPrice } from "@/lib/commerce/products";
+import { formatDay } from "@/lib/dates";
 
 const PRICE = formatPrice(VIDEO_PRICE_CENTS);
 
-type Cap = { remaining: number; capacity: number; paused: boolean };
-
 const STEPS = [
-  { key: "queued", label: "Requested" },
+  { key: "booked", label: "Booked" },
   { key: "recording", label: "Being recorded" },
   { key: "ready", label: "Ready to watch" },
 ] as const;
@@ -36,67 +35,130 @@ function Timeline({ status }: { status: OwnerVideoView["status"] }) {
   );
 }
 
+function NoteField({ note, setNote, dark = true }: { note: string; setNote: (s: string) => void; dark?: boolean }) {
+  return (
+    <label className="mt-5 block">
+      <span className={`text-[0.85rem] ${dark ? "text-card/80" : "text-ink-soft"}`}>
+        Anything the founder should know? <span className="opacity-60">(optional)</span>
+      </span>
+      <textarea
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+        maxLength={400}
+        rows={3}
+        placeholder="How to pronounce their name, an inside joke, the vibe…"
+        className="mt-2 w-full rounded-2xl border border-card/15 bg-card/5 px-4 py-3 text-[0.95rem] text-card placeholder:text-card/40 focus:border-card/40 focus:outline-none"
+      />
+    </label>
+  );
+}
+
 export function VideoPanel({
   token,
   ownerKey,
-  video,
-  capacity,
+  state,
   recipient,
-  onChange,
+  onState,
 }: {
   token: string;
   ownerKey: string;
-  video: OwnerVideoView | null;
-  capacity: Cap | null;
+  state: OwnerState | null;
   recipient: string;
-  onChange: () => void;
+  onState: (s: OwnerState) => void;
 }) {
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
 
-  async function order() {
+  async function call(path: string, method: string, body?: unknown) {
     setBusy(true);
     setError(null);
-    const res = await fetch(`/api/hugs/${token}/video`, {
-      method: "POST",
+    const res = await fetch(`/api/hugs/${token}/${path}`, {
+      method,
       headers: { "content-type": "application/json", "x-owner-key": ownerKey },
-      body: JSON.stringify({ note }),
+      body: body ? JSON.stringify(body) : undefined,
     });
-    const body = await res.json().catch(() => ({}));
+    const out = await res.json().catch(() => ({}));
     setBusy(false);
-    if (!res.ok) return setError(body.error ?? "Couldn’t place that order.");
-    onChange();
+    if (!res.ok) {
+      setError(out.error ?? "That didn’t work.");
+      // Refresh so the panel reflects what actually happened (e.g. a day just filled up).
+      const fresh = await fetch(`/api/hugs/${token}`, { headers: { "x-owner-key": ownerKey } });
+      if (fresh.ok) onState(await fresh.json());
+      return;
+    }
+    onState(out as OwnerState);
   }
 
-  async function cancel() {
-    if (!confirm("Cancel this video? You won’t be charged.")) return;
-    setBusy(true);
-    const res = await fetch(`/api/hugs/${token}/video`, { method: "DELETE", headers: { "x-owner-key": ownerKey } });
-    setBusy(false);
-    if (!res.ok) setError((await res.json().catch(() => ({}))).error ?? "Couldn’t cancel.");
-    onChange();
-  }
+  if (!state) return null;
+  const v = state.video;
+  const when = (d: string) => formatDay(d, state.today);
 
-  if (video && video.status !== "canceled") {
+  // ---- an active order ----
+  if (v && v.status !== "canceled") {
+    if (v.status === "held") {
+      return (
+        <section className="rounded-[1.6rem] bg-ink p-6 text-card">
+          <p className="text-[0.7rem] font-medium uppercase tracking-[0.22em] text-blush">From the waitlist</p>
+          <h2 className="mt-2 font-display text-[1.6rem] leading-[1.1] tracking-[-0.02em]">
+            A slot opened up — <span className="font-wonk text-blush">{when(v.recordingDay)}.</span>
+          </h2>
+          <p className="mt-3 text-[0.92rem] leading-relaxed text-card/75">
+            We’re holding it for you
+            {v.holdExpiresAt && <> until {new Date(v.holdExpiresAt).toLocaleString("en-US", { weekday: "short", hour: "numeric", minute: "2-digit" })}</>}.
+            Confirm to book your {PRICE} founder video. Nothing was charged while you waited.
+          </p>
+          <div className="mt-5 flex flex-col gap-2">
+            <Button onClick={() => call("video", "POST", { confirmHold: true })} disabled={busy} className="w-full">
+              {busy ? "Booking…" : `Book it · ${PRICE}`}
+            </Button>
+            <button
+              type="button"
+              onClick={() => call("waitlist", "DELETE")}
+              disabled={busy}
+              className="h-11 rounded-full text-[0.92rem] text-card/80 underline-offset-4 hover:text-card hover:underline disabled:opacity-40"
+            >
+              No thanks, release the slot
+            </button>
+          </div>
+          <p className="mt-2 text-center text-[0.75rem] text-card/50">Demo: no charge.</p>
+          {error && <p className="mt-3 text-[0.85rem] text-blush">{error}</p>}
+        </section>
+      );
+    }
     return (
       <section className="rounded-[1.6rem] border border-line bg-card/70 p-6">
         <p className="text-[0.7rem] font-medium uppercase tracking-[0.22em] text-clay">Founder video · {PRICE}</p>
         <h2 className="mt-2 font-display text-[1.6rem] leading-tight tracking-[-0.02em]">
-          {video.status === "queued" && <>You’re in the queue{video.queuePosition ? <> — <span className="font-wonk">#{video.queuePosition}</span></> : null}</>}
-          {video.status === "recording" && <>Being recorded <span className="font-wonk">right now.</span></>}
-          {video.status === "ready" && <>It’s recorded. <span className="font-wonk">It’s ready.</span></>}
+          {v.status === "booked" && (
+            <>
+              Booked for <span className="font-wonk">{when(v.recordingDay)}.</span>
+            </>
+          )}
+          {v.status === "recording" && (
+            <>
+              Being recorded <span className="font-wonk">right now.</span>
+            </>
+          )}
+          {v.status === "ready" && (
+            <>
+              It’s recorded. <span className="font-wonk">It’s ready.</span>
+            </>
+          )}
         </h2>
-        <Timeline status={video.status} />
+        {v.status === "booked" && v.positionInDay && (
+          <p className="mt-1 text-[0.85rem] text-ink-faint">You’re #{v.positionInDay} on that day’s list.</p>
+        )}
+        <Timeline status={v.status} />
         <p className="mt-5 text-[0.88rem] leading-relaxed text-ink-soft">
-          {video.status === "ready"
-            ? "The video is now on the hug itself — anyone with the private link can watch it."
-            : "Our founder records each video by hand. We’ll only show it as ready once the recording is actually uploaded — never before. Check back here anytime."}
+          {v.status === "ready"
+            ? "The video is now on the hug itself. Anyone with the private link can watch it."
+            : "Our founder records each video by hand. We’ll only show it as ready once the recording is actually uploaded — never before."}
         </p>
-        {video.note && <p className="mt-3 rounded-xl bg-paper px-3 py-2 text-[0.82rem] text-ink-soft">Your note: “{video.note}”</p>}
-        {video.status === "queued" && (
-          <Button variant="quiet" size="sm" className="mt-3 -ml-3" onClick={cancel} disabled={busy}>
+        {v.note && <p className="mt-3 rounded-xl bg-paper px-3 py-2 text-[0.82rem] text-ink-soft">Your note: “{v.note}”</p>}
+        {v.status === "booked" && (
+          <Button variant="quiet" size="sm" className="mt-3 -ml-3" onClick={() => confirm("Cancel this video? You won’t be charged.") && call("video", "DELETE")} disabled={busy}>
             Cancel video (no charge)
           </Button>
         )}
@@ -105,14 +167,33 @@ export function VideoPanel({
     );
   }
 
-  const full = capacity ? capacity.remaining <= 0 : false;
+  // ---- waiting on the free waitlist ----
+  if (state.waitlist) {
+    return (
+      <section className="rounded-[1.6rem] border border-line bg-card/70 p-6">
+        <p className="text-[0.7rem] font-medium uppercase tracking-[0.22em] text-clay">Free waitlist</p>
+        <h2 className="mt-2 font-display text-[1.6rem] leading-tight tracking-[-0.02em]">
+          You’re on the list. <span className="font-wonk">No charge.</span>
+        </h2>
+        <p className="mt-3 text-[0.9rem] leading-relaxed text-ink-soft">
+          When a recording slot opens, we’ll hold it for you for 24 hours. Come back here to confirm, or ignore it and it passes to the next person.
+        </p>
+        <Button variant="quiet" size="sm" className="mt-3 -ml-3" onClick={() => call("waitlist", "DELETE")} disabled={busy}>
+          Leave the waitlist
+        </Button>
+        {error && <p className="mt-3 text-[0.85rem] text-clay-deep">{error}</p>}
+      </section>
+    );
+  }
 
+  // ---- the offer ----
+  const next = state.nextAvailable;
   return (
     <section className="overflow-hidden rounded-[1.6rem] bg-ink text-card">
       <div className="p-6">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <p className="text-[0.7rem] font-medium uppercase tracking-[0.22em] text-blush">Upgrade · {PRICE}</p>
+            <p className="text-[0.7rem] font-medium uppercase tracking-[0.22em] text-blush">Founder video · {PRICE}</p>
             <h2 className="mt-2 font-display text-[1.6rem] leading-[1.1] tracking-[-0.02em]">
               Hear it <span className="font-wonk text-blush">out loud.</span>
             </h2>
@@ -120,49 +201,48 @@ export function VideoPanel({
           <HugMark className="h-8 w-8 shrink-0 text-blush" />
         </div>
         <p className="mt-3 text-[0.92rem] leading-relaxed text-card/75">
-          A real human — our founder — reads this hug to {recipient} on camera. Recorded by hand, five each recording day.
+          Our founder reads this hug to {recipient} on camera, by hand. Five recordings per recording day.
         </p>
-        {video?.status === "canceled" && (
+        {v?.status === "canceled" && (
           <p className="mt-3 rounded-xl bg-card/10 px-3 py-2 text-[0.82rem] text-card/80">
-            Your last video request was cancelled ({video.canceledReason ?? "no reason given"}). You weren’t charged.
+            Your last video was cancelled ({v.canceledReason ?? "no reason given"}). You weren’t charged.
           </p>
         )}
 
-        {open && !full && (
-          <label className="mt-5 block">
-            <span className="text-[0.85rem] text-card/80">Anything the founder should know? <span className="text-card/50">(optional)</span></span>
-            <textarea
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              maxLength={400}
-              rows={3}
-              placeholder="How to pronounce their name, an inside joke, the vibe…"
-              className="mt-2 w-full rounded-2xl border border-card/15 bg-card/5 px-4 py-3 text-[0.95rem] text-card placeholder:text-card/40 focus:border-card/40 focus:outline-none"
-            />
-          </label>
-        )}
+        <p className="mt-5 flex items-center gap-2 text-[0.88rem] text-card/85">
+          <span className={`h-2 w-2 rounded-full ${next ? "bg-[#9fd49a]" : "bg-blush"}`} />
+          {next
+            ? `Next recording day: ${when(next.day)} · ${next.remaining} ${next.remaining === 1 ? "slot" : "slots"} left`
+            : state.paused
+              ? "The studio is taking a short break."
+              : "Every recording day in the next two weeks is full."}
+        </p>
+
+        {open && <NoteField note={note} setNote={setNote} />}
 
         <div className="mt-5 flex flex-col gap-3">
-          {full ? (
-            <p className="rounded-2xl border border-card/15 px-4 py-3 text-[0.9rem] text-card/80">
-              {capacity?.paused
-                ? "The studio is taking a short break. Video orders reopen soon."
-                : "Today’s recording slots are full. Fresh slots open tomorrow morning — your written hug is yours either way."}
-            </p>
+          {next ? (
+            open ? (
+              <Button onClick={() => call("video", "POST", { note })} disabled={busy} className="w-full">
+                {busy ? "Booking…" : `Book ${when(next.day)} · ${PRICE}`}
+              </Button>
+            ) : (
+              <Button onClick={() => setOpen(true)} className="w-full">
+                Add a founder video · {PRICE}
+              </Button>
+            )
           ) : open ? (
-            <Button variant="primary" onClick={order} disabled={busy} className="w-full">
-              {busy ? "Placing order…" : `Request video · ${PRICE}`}
+            <Button onClick={() => call("waitlist", "POST", { note })} disabled={busy} className="w-full">
+              {busy ? "Joining…" : "Join the free waitlist"}
             </Button>
           ) : (
-            <Button variant="primary" onClick={() => setOpen(true)} className="w-full">
-              Add a founder video · {PRICE}
+            <Button onClick={() => setOpen(true)} className="w-full">
+              Join the free waitlist
             </Button>
           )}
-          {capacity && !full && (
-            <p className="text-center text-[0.78rem] text-card/60">
-              {capacity.remaining} of {capacity.capacity} recording slots left today · demo: no charge · never charged if we can’t record it
-            </p>
-          )}
+          <p className="text-center text-[0.78rem] text-card/60">
+            {next ? "Demo: no charge. Never charged if we can’t record it." : "Free to join. You only pay if you confirm a slot."}
+          </p>
           {error && <p className="text-[0.85rem] text-blush">{error}</p>}
         </div>
       </div>

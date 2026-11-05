@@ -6,7 +6,11 @@
 // orders paid, and manual capture for videos so customers are only charged
 // once a video is actually uploaded — and released if it can't be recorded.
 
-import type { DemoPayment } from "../types";
+export type DemoPayment = {
+  provider: "demo"; // "stripe" later
+  amountCents: number;
+  status: "demo_free" | "demo_authorized" | "demo_refunded";
+};
 import { product } from "./products.ts";
 
 export interface PaymentProvider {

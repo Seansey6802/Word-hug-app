@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULT_VIDEO_CAPACITY, PRODUCTS, VIDEO_PRICE_CENTS, WRITTEN_PRICE_CENTS, formatPrice, product } from "../lib/commerce/products.ts";
+import { DEFAULT_VIDEO_CAPACITY, PRODUCTS, VIDEO_PRICE_CENTS, WRITTEN_PRICE_CENTS, formatPrice, product } from "../../lib/commerce/products.ts";
 
 test("founder video is $15", () => {
   assert.equal(VIDEO_PRICE_CENTS, 1500);
@@ -34,7 +34,7 @@ test("nothing is wired to a real Stripe price yet", () => {
 });
 
 test("demo checkout authorizes $15 for a video and charges nothing real", async () => {
-  const { payments } = await import("../lib/commerce/payments.ts");
+  const { payments } = await import("../../lib/commerce/payments.ts");
   const p = await payments().authorize("hug_video");
   assert.deepEqual(p, { provider: "demo", amountCents: 1500, status: "demo_authorized" });
 });

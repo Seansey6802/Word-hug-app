@@ -1,5 +1,8 @@
 export const PHOTO_DAYS = 30;
 
+/** Bump when the consent wording changes; stored with every photo. */
+export const CONSENT_VERSION = "2026-11-v1";
+
 export const CONSENT_TEXT =
   "I have the right to share this photo, and anyone in it is OK with it being used. Store it privately for up to 30 days to show on this Word Hug. I can delete it at any time.";
 
