@@ -7,7 +7,7 @@
 // once a video is actually uploaded — and released if it can't be recorded.
 
 import type { DemoPayment } from "../types";
-import { product } from "./products";
+import { product } from "./products.ts";
 
 export interface PaymentProvider {
   name: "demo" | "stripe";

@@ -4,6 +4,9 @@ import { useState } from "react";
 import { Button } from "@/components/Button";
 import { HugMark } from "@/components/Wordmark";
 import type { OwnerVideoView } from "@/lib/types";
+import { VIDEO_PRICE_CENTS, formatPrice } from "@/lib/commerce/products";
+
+const PRICE = formatPrice(VIDEO_PRICE_CENTS);
 
 type Cap = { remaining: number; capacity: number; paused: boolean };
 
@@ -79,7 +82,7 @@ export function VideoPanel({
   if (video && video.status !== "canceled") {
     return (
       <section className="rounded-[1.6rem] border border-line bg-card/70 p-6">
-        <p className="text-[0.7rem] font-medium uppercase tracking-[0.22em] text-clay">Video Word Hug · $5</p>
+        <p className="text-[0.7rem] font-medium uppercase tracking-[0.22em] text-clay">Founder video · {PRICE}</p>
         <h2 className="mt-2 font-display text-[1.6rem] leading-tight tracking-[-0.02em]">
           {video.status === "queued" && <>You’re in the queue{video.queuePosition ? <> — <span className="font-wonk">#{video.queuePosition}</span></> : null}</>}
           {video.status === "recording" && <>Being recorded <span className="font-wonk">right now.</span></>}
@@ -109,7 +112,7 @@ export function VideoPanel({
       <div className="p-6">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <p className="text-[0.7rem] font-medium uppercase tracking-[0.22em] text-blush">Upgrade · $5</p>
+            <p className="text-[0.7rem] font-medium uppercase tracking-[0.22em] text-blush">Upgrade · {PRICE}</p>
             <h2 className="mt-2 font-display text-[1.6rem] leading-[1.1] tracking-[-0.02em]">
               Hear it <span className="font-wonk text-blush">out loud.</span>
             </h2>
@@ -117,7 +120,7 @@ export function VideoPanel({
           <HugMark className="h-8 w-8 shrink-0 text-blush" />
         </div>
         <p className="mt-3 text-[0.92rem] leading-relaxed text-card/75">
-          A real human — our founder — reads this hug to {recipient} on camera. Recorded by hand, a few each day.
+          A real human — our founder — reads this hug to {recipient} on camera. Recorded by hand, five each recording day.
         </p>
         {video?.status === "canceled" && (
           <p className="mt-3 rounded-xl bg-card/10 px-3 py-2 text-[0.82rem] text-card/80">
@@ -148,16 +151,16 @@ export function VideoPanel({
             </p>
           ) : open ? (
             <Button variant="primary" onClick={order} disabled={busy} className="w-full">
-              {busy ? "Placing order…" : "Request video · $5 (demo — no charge)"}
+              {busy ? "Placing order…" : `Request video · ${PRICE}`}
             </Button>
           ) : (
             <Button variant="primary" onClick={() => setOpen(true)} className="w-full">
-              Add a video for $5
+              Add a founder video · {PRICE}
             </Button>
           )}
           {capacity && !full && (
             <p className="text-center text-[0.78rem] text-card/60">
-              {capacity.remaining} of {capacity.capacity} recording slots left today · not charged if we can’t record it
+              {capacity.remaining} of {capacity.capacity} recording slots left today · demo: no charge · never charged if we can’t record it
             </p>
           )}
           {error && <p className="text-[0.85rem] text-blush">{error}</p>}

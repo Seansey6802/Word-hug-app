@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { SiteFooter, SiteHeader } from "@/components/SiteHeader";
 import { ButtonLink } from "@/components/Button";
-import { PRODUCTS, formatPrice } from "@/lib/commerce/products";
+import { DEFAULT_VIDEO_CAPACITY, PRODUCTS, formatPrice } from "@/lib/commerce/products";
 
 export const metadata: Metadata = { title: "Pricing" };
 
@@ -14,14 +14,19 @@ export default function PricingPage() {
           Small prices for <span className="font-wonk">big feelings.</span>
         </h1>
         <p className="mt-4 max-w-lg text-ink-soft">
-          During the preview, written hugs are free and video orders are demo-only. When we launch, payments will be handled securely by Stripe.
+          During the preview, written hugs are free and video orders are demo-only. When we launch, payments will be handled securely by Stripe. Subscriptions are coming later.
         </p>
         <ul className="mt-10 divide-y divide-line border-y border-line">
-          {PRODUCTS.map((p) => (
+          {PRODUCTS.filter((p) => !p.deferred).map((p) => (
             <li key={p.sku} className="flex items-start justify-between gap-6 py-6">
               <div>
                 <p className="font-display text-[1.35rem] leading-tight">{p.name}</p>
                 <p className="mt-1 text-[0.93rem] text-ink-soft">{p.description}</p>
+                {p.kind === "video" && (
+                  <p className="mt-1 text-[0.85rem] text-ink-faint">
+                    Up to {DEFAULT_VIDEO_CAPACITY} per recording day. Charged only once your video is recorded and uploaded.
+                  </p>
+                )}
                 <p className={`mt-2 text-[0.72rem] font-medium uppercase tracking-[0.18em] ${p.available ? "text-clay" : "text-ink-faint"}`}>
                   {p.available ? "In the preview" : "Coming soon"}
                 </p>

@@ -7,13 +7,14 @@ import path from "node:path";
 import { randomBytes } from "node:crypto";
 import type { Hug, StudioSettings, VideoOrder } from "../types";
 import { seedDemoData } from "./demo-data";
+import { DEFAULT_VIDEO_CAPACITY, VIDEO_PRICE_CENTS } from "../commerce/products";
 
 const DATA_DIR = path.join(process.cwd(), ".data");
 const DB_FILE = path.join(DATA_DIR, "db.json");
 const FILES_DIR = path.join(DATA_DIR, "private");
 
 type DB = {
-  version: 1;
+  version: 1 | 2;
   secret: string; // signs studio sessions
   hugs: Hug[];
   videos: VideoOrder[];
@@ -32,17 +33,26 @@ async function load(): Promise<DB> {
   if (shared.cache && mtime === shared.mtime) return shared.cache;
   if (mtime) {
     // Never silently reseed over an existing file; a parse error should surface.
-    shared.cache = JSON.parse(await fs.readFile(DB_FILE, "utf8")) as DB;
+    const db = JSON.parse(await fs.readFile(DB_FILE, "utf8")) as DB;
+    if (db.version === 1) {
+      // v2: founder videos move to $15 and five per recording day.
+      db.version = 2;
+      db.settings.dailyCapacity = DEFAULT_VIDEO_CAPACITY;
+      for (const v of db.videos) if (v.demo) v.payment.amountCents = VIDEO_PRICE_CENTS;
+      await persist(db);
+      return db;
+    }
+    shared.cache = db;
     shared.mtime = mtime;
     return shared.cache;
   }
   {
     const cache: DB = {
-      version: 1,
+      version: 2,
       secret: randomBytes(32).toString("hex"),
       hugs: [],
       videos: [],
-      settings: { dailyCapacity: 8, paused: false },
+      settings: { dailyCapacity: DEFAULT_VIDEO_CAPACITY, paused: false },
     };
     seedDemoData(cache);
     await persist(cache);

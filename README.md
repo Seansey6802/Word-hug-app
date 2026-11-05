@@ -2,7 +2,7 @@
 
 > Sometimes you just need a Word Hug.
 
-A mobile-first prototype for personalized compliments, pep talks, loving roasts, cheesy pickup lines, and $5 videos recorded by a real human.
+A mobile-first prototype for personalized compliments, pep talks, loving roasts, cheesy pickup lines, and $15 personalized videos recorded by the founder.
 
 **Prototype status:** local-only. Uses fictional demo data. No real payments, no paid APIs, not deployed.
 
@@ -39,6 +39,19 @@ Open `/studio`. The prototype passcode is `demo-studio`; set your own with `STUD
 | Future commerce (products, Stripe boundary) | `lib/commerce/*`, `app/pricing` |
 | Database schema (Supabase, not applied) | `supabase/migrations/0001_init.sql` |
 
+### Pricing (prototype, demo-only)
+
+- Written Word Hug: **$1**, free during the preview.
+- Founder video: **$15**. Initial capacity is **5 per recording day**, adjustable in the studio.
+- "A Pocketful" (10 written hugs, $8): coming soon. The old bundle that included a video was removed.
+- Weekly subscription: deferred and hidden from the pricing page.
+
+All prices live in `lib/commerce/products.ts`, and `npm test` checks them.
+
+### Photography direction
+
+Candid human connection, stationery and handwritten notes, and gifting moments, plus the occasional animal for humor (two of ten photos). Word Hug is not a pet brand.
+
 ### Writing
 
 Hugs are assembled from an original, hand-written line library: an opener, body lines, a personal line, and a closer. The library is tagged by tone and intensity, and it reacts to names, interests, and the occasion. Lines a person has already seen are avoided, and "Write another version" redraws the hug. Roasts target habits only, never bodies or identity, and always end on love. The composer never receives the photo.
@@ -65,11 +78,11 @@ npm run build
 
 ## Photography
 
-Photos are from Unsplash, used under the Unsplash License, and stored in `public/photos`. IDs are listed in `lib/photos.ts`. Confirm the photographer credits before launch, or replace these with an original shoot.
+Photos are from Unsplash (8 people/stationery, 2 animals), used under the Unsplash License, and stored in `public/photos`. IDs are listed in `lib/photos.ts`. Confirm the photographer credits before launch, or replace these with an original shoot.
 
 ## Next milestones (pending approval)
 
 1. Supabase adapter and private storage buckets (signed URLs).
-2. Stripe Checkout: $1 written hugs; $5 videos with manual capture, charged only after upload.
+2. Stripe Checkout: $1 written hugs; $15 founder videos with manual capture, charged only after upload.
 3. Email or SMS notification when a video is ready.
-4. Bundles and subscriptions.
+4. Written-hug bundles. (Subscriptions deferred.)

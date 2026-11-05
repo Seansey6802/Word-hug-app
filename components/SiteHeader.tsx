@@ -29,7 +29,7 @@ export function SiteFooter() {
           <Link href="/studio" className="hover:text-ink">Studio</Link>
         </nav>
       </div>
-      <p className="mt-6 text-xs">Photography via Unsplash. No dogs were rushed.</p>
+      <p className="mt-6 text-xs">Photography via Unsplash.</p>
     </footer>
   );
 }

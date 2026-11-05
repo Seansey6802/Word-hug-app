@@ -73,7 +73,7 @@ create table video_status_events (
 
 create table studio_settings (
   id boolean primary key default true check (id),
-  daily_capacity int not null default 8 check (daily_capacity between 0 and 50),
+  daily_capacity int not null default 5 check (daily_capacity between 0 and 50),
   paused boolean not null default false,
   timezone text not null default 'America/New_York'
 );

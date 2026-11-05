@@ -6,6 +6,7 @@ import type { Category, Intensity, Occasion, Tone } from "../catalog";
 import type { DB } from "./store";
 import type { Hug, VideoOrder, VideoStatus } from "../types";
 import { hashKey, newId, newToken } from "./ids";
+import { VIDEO_PRICE_CENTS, WRITTEN_PRICE_CENTS } from "../commerce/products";
 
 const DEMO: {
   recipient: string;
@@ -78,7 +79,7 @@ export function seedDemoData(db: DB) {
       seed,
       content: compose({ ...d, name: d.recipient, seed }),
       revisions: 0,
-      payment: { provider: "demo", amountCents: 100, status: "demo_free" },
+      payment: { provider: "demo", amountCents: WRITTEN_PRICE_CENTS, status: "demo_free" },
       demo: true,
     };
     const history: VideoOrder["history"] = [{ status: "queued", at: createdAt }];
@@ -90,7 +91,7 @@ export function seedDemoData(db: DB) {
       status: d.status,
       history,
       note: d.note,
-      payment: { provider: "demo", amountCents: 500, status: "demo_authorized" },
+      payment: { provider: "demo", amountCents: VIDEO_PRICE_CENTS, status: "demo_authorized" },
       demo: true,
     };
     db.hugs.push(hug);

@@ -8,7 +8,7 @@ import type { VideoOrder } from "@/lib/types";
 export const runtime = "nodejs";
 type Ctx = { params: Promise<{ token: string }> };
 
-/** Request a $5 video (demo: nothing is charged). Enforces the daily capacity. */
+/** Request a $15 founder video (demo: nothing is charged). Enforces the daily capacity. */
 export async function POST(req: Request, { params }: Ctx) {
   const { token } = await params;
   const r = await ownerHug(req, token);

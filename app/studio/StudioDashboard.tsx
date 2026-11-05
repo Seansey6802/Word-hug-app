@@ -254,7 +254,7 @@ export function StudioDashboard() {
       </nav>
 
       <ul className="mt-5 space-y-4">
-        {orders.length === 0 && <li className="rounded-2xl border border-dashed border-ink/20 p-8 text-center text-ink-faint">Nothing here. Go hug a dog.</li>}
+        {orders.length === 0 && <li className="rounded-2xl border border-dashed border-ink/20 p-8 text-center text-ink-faint">Nothing here. Go hug someone.</li>}
         {orders.map((o) => (
           <OrderCard key={o.id} o={o} onChange={load} />
         ))}

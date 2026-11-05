@@ -1,5 +1,7 @@
 // Editorial photography. Files live in /public/photos, downloaded from Unsplash
 // (Unsplash License: free to use, commercial included, no permission needed).
+// Art direction: candid human connection, stationery and handwritten notes,
+// gifting moments — with only the occasional animal, for humor.
 // Before launch: confirm each photographer credit on unsplash.com and consider
 // commissioning an original Word Hug shoot.
 
@@ -7,41 +9,78 @@ export type Photo = { src: string; alt: string; caption: string; unsplash: strin
 
 export const PHOTOS = {
   hero: {
-    src: "/photos/hero-golden-hug.jpg",
-    alt: "A man in a red sweater hugs a smiling golden retriever on a mountainside at dusk.",
-    caption: "Fig. 1 — A golden retriever receiving a Word Hug. Fully committed. No notes.",
-    unsplash: "photo-1522276498395-f4f68f7f8454",
+    src: "/photos/hero-friends-laughing.jpg",
+    alt: "Three friends in warm late-afternoon light, laughing together mid-conversation.",
+    caption: "Fig. 1 — The exact moment someone read their Word Hug out loud.",
+    unsplash: "photo-1491438590914-bc09fcaaf77a",
     w: 1800,
-    h: 1202,
-    focus: "62% 40%",
+    h: 1200,
+    focus: "55% 40%",
   },
-  window: {
-    src: "/photos/window-couple-dog.jpg",
-    alt: "A smiling couple framed in a window, with a small black-and-white dog standing between them.",
-    caption: "Ready for its close-up.",
-    unsplash: "photo-1601758124510-52d02ddb7cbd",
+  pen: {
+    src: "/photos/fountain-pen-letter.jpg",
+    alt: "A fountain pen writing a handwritten letter in looping script.",
+    caption: "Written with care. Occasionally with a fountain pen.",
+    unsplash: "photo-1455390582262-044cdead277a",
     w: 1600,
-    h: 1016,
-    focus: "50% 45%",
+    h: 1201,
+    focus: "40% 45%",
   },
-  bed: {
-    src: "/photos/bed-friends-dogs.jpg",
-    alt: "Two friends laughing on a sunlit bed with two small dogs.",
-    caption: "Encouragement, administered horizontally.",
-    unsplash: "photo-1601758003122-53c40e686a19",
+  embrace: {
+    src: "/photos/friends-sunset-embrace.jpg",
+    alt: "Four friends with their arms around each other, watching a golden sunset over hills.",
+    caption: "Encouragement, administered shoulder to shoulder.",
+    unsplash: "photo-1511632765486-a01980e01a18",
     w: 1600,
     h: 1067,
-    focus: "58% 60%",
+    focus: "55% 55%",
   },
-  cuddle: {
-    src: "/photos/cat-dog-cuddle.jpg",
-    alt: "A tabby cat and a fluffy puppy cuddle in the grass.",
-    caption: "Hugs come in all shapes. Some of them are cats.",
-    unsplash: "photo-1450778869180-41d0601e046e",
+  heart: {
+    src: "/photos/paper-heart-hands.jpg",
+    alt: "One hand passing a small black paper heart to another hand.",
+    caption: "Smooth. Possibly too smooth.",
+    unsplash: "photo-1579208575657-c595a05383b7",
+    w: 1400,
+    h: 933,
+    focus: "50% 50%",
+  },
+  notebook: {
+    src: "/photos/writing-notebook-coffee.jpg",
+    alt: "Hands writing in an open notebook on a wooden table, beside a coffee and a croissant.",
+    caption: "A few details go a long way.",
+    unsplash: "photo-1456324504439-367cee3b3c32",
     w: 1600,
-    h: 941,
+    h: 1067,
+    focus: "50% 60%",
+  },
+  table: {
+    src: "/photos/friends-table-laughing.jpg",
+    alt: "Four friends around a café table, laughing as they watch something on a tablet.",
+    caption: "Playing it twice. Then a third time.",
+    unsplash: "photo-1543269865-cbf427effbad",
+    w: 1600,
+    h: 1067,
+    focus: "45% 45%",
+  },
+  gift: {
+    src: "/photos/gift-held-out.jpg",
+    alt: "A person holds out a small gift wrapped in kraft paper and striped string.",
+    caption: "For you. Yes, you.",
+    unsplash: "photo-1512909006721-3d6018887383",
+    w: 1600,
+    h: 1067,
+    focus: "45% 55%",
+  },
+  envelopes: {
+    src: "/photos/envelopes-stationery.jpg",
+    alt: "A wall of cream and white envelopes and paper tags, neatly overlapping.",
+    caption: "Every hug arrives sealed.",
+    unsplash: "photo-1526554850534-7c78330d5f90",
+    w: 1600,
+    h: 1068,
     focus: "40% 50%",
   },
+  // The occasional animal, strictly for comic relief.
   reading: {
     src: "/photos/reading-glasses-dog.jpg",
     alt: "A dog wearing glasses appears to read a magazine.",
@@ -60,29 +99,11 @@ export const PHOTOS = {
     h: 802,
     focus: "50% 50%",
   },
-  pug: {
-    src: "/photos/pug-red-sweater.jpg",
-    alt: "A black pug in a knitted sweater against a red backdrop, looking off to the side.",
-    caption: "Smooth. Unbothered. Single.",
-    unsplash: "photo-1517423440428-a5a00ad493e8",
-    w: 1200,
-    h: 1552,
-    focus: "50% 30%",
-  },
-  greyhound: {
-    src: "/photos/greyhound-cuddle.jpg",
-    alt: "A black-and-white whippet leans into a smiling woman on a sofa, with a cat behind them.",
-    caption: "Leaning in.",
-    unsplash: "photo-1601758177266-bc599de87707",
-    w: 1600,
-    h: 1068,
-    focus: "50% 55%",
-  },
 } satisfies Record<string, Photo>;
 
 export const CATEGORY_PHOTO = {
-  encourage: PHOTOS.bed,
+  encourage: PHOTOS.embrace,
   roast: PHOTOS.reading,
-  flirt: PHOTOS.pug,
+  flirt: PHOTOS.heart,
   laugh: PHOTOS.banana,
 } as const;
