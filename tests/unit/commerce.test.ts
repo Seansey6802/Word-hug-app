@@ -33,8 +33,23 @@ test("nothing is wired to a real Stripe price yet", () => {
   for (const p of PRODUCTS) assert.equal(p.stripePriceId, undefined);
 });
 
-test("demo checkout authorizes $15 for a video and charges nothing real", async () => {
-  const { payments } = await import("../../lib/commerce/payments.ts");
-  const p = await payments().authorize("hug_video");
-  assert.deepEqual(p, { provider: "demo", amountCents: 1500, status: "demo_authorized" });
+test("payments refuse live keys and unknown modes", async () => {
+  const { assertTestKey, paymentsMode } = await import("../../lib/payments/gateway.ts");
+  assert.throws(() => assertTestKey("sk_live_123"), /non-test/);
+  assert.throws(() => assertTestKey("rk_live_123"), /non-test/);
+  assert.throws(() => assertTestKey(undefined), /not set/);
+  assert.equal(assertTestKey("sk_test_abc"), "sk_test_abc");
+  const old = process.env.PAYMENTS_MODE;
+  process.env.PAYMENTS_MODE = "live";
+  assert.throws(() => paymentsMode(), /Live payments are not enabled/);
+  process.env.PAYMENTS_MODE = "demo";
+  assert.throws(() => paymentsMode());
+  process.env.PAYMENTS_MODE = old;
+});
+
+test("bundles stay deferred, hidden and unavailable", () => {
+  for (const p of PRODUCTS.filter((x) => x.kind === "bundle")) {
+    assert.equal(p.available, false);
+    assert.equal(p.deferred, true);
+  }
 });

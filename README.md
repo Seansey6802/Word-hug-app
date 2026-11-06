@@ -4,7 +4,7 @@
 
 A mobile-first prototype for personalized compliments, pep talks, loving roasts, cheesy pickup lines, and $15 personalized videos recorded by the founder.
 
-**Status:** M2 (Supabase database + private media) on `dev/m2-supabase`. Local-only, fictional demo data, no real payments, not deployed. See [docs/M2-REVIEW.md](docs/M2-REVIEW.md) for test results, risks, costs and open decisions.
+**Status:** M3 on `dev/m3-staging-payments`: founder MFA, Stripe test-mode payment flows, beta studio rules. Local-only, fictional data, no live billing, not deployed. See [docs/M3-REVIEW.md](docs/M3-REVIEW.md) for the go/no-go, provider pricing, risks and what's needed for cloud staging. (M2: [docs/M2-REVIEW.md](docs/M2-REVIEW.md).)
 
 ## Run it
 
@@ -30,7 +30,7 @@ Clipboard access, the share sheet, and "Save image" all work over a plain LAN ad
 
 ### Founder studio
 
-Open `/studio`. The local passcode is `demo-studio` (refused on any non-localhost deployment). The studio shows bookings grouped by recording day, per-day capacity, closed days and the waitlist. On a phone, "Upload recording" can open the front camera; the file goes straight to private storage through a single-use signed link.
+Create a founder account with `npm run staff:add -- you@example.com` (prints a one-time password), then sign in at `/studio`. First sign-in sets up an authenticator app (MFA); every sign-in needs the 6-digit code. Public sign-up is disabled. The studio shows bookings grouped by recording day, per-day capacity, closed days and the waitlist. On a phone, "Upload recording" can open the front camera; the file goes straight to private storage through a single-use signed link.
 
 Recovery emails sent locally land in Mailpit at http://127.0.0.1:54324 (nothing is actually delivered).
 
@@ -54,8 +54,7 @@ Recovery emails sent locally land in Mailpit at http://127.0.0.1:54324 (nothing 
 
 - Written Word Hug: **$1**, free during the preview.
 - Founder video: **$15**. Initial capacity is **5 per recording day**, adjustable in the studio.
-- "A Pocketful" (10 written hugs, $8): coming soon. The old bundle that included a video was removed.
-- Weekly subscription: deferred and hidden from the pricing page.
+- "A Pocketful" (10 written hugs, $8) and the weekly subscription: deferred and hidden. The old bundle that included a video was removed.
 
 All prices live in `lib/commerce/products.ts`, and `npm test` checks them.
 
@@ -75,7 +74,7 @@ Hugs are assembled from an original, hand-written line library: an opener, body 
 - **Gift links** use 128-bit random tokens, with `noindex` and `no-referrer`. A different key, kept only on the creator's device, controls editing and deletion.
 - **Photos** need explicit consent, which is stored with its wording and version. They are re-encoded on the device to strip EXIF and GPS data, kept in a private bucket and served only through 10-minute signed links. They are never analyzed. They stop being visible the moment they expire (30 days), and the hourly job deletes the file. Owners can delete them at any time. The founder sees a photo only if the customer opted in.
 - **Ownership** is a key held on the creator's device (stored only as a hash). An optional recovery email sends a single-use, 30-minute link, which rotates the keys so a lost device loses control.
-- **Payments** go through a demo provider that records intended amounts only. `PAYMENTS_MODE` must be `demo`.
+- **Payments (test mode only).** Written hugs ($1) are paid through Checkout before the hug is created. For videos ($15), booking saves a card, recording requires a $15 authorization, and the charge is captured only after the upload is verified; the video is released only after capture. `PAYMENTS_MODE=fake` runs a local stand-in (test cards at `/dev/checkout/...`); `stripe_test` uses Stripe test mode. Live keys are refused.
 
 ## Tests
 

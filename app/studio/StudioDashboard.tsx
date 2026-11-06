@@ -5,13 +5,46 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/Button";
 import { formatDay } from "@/lib/dates";
 import type { StudioDay, StudioOrder } from "@/lib/types";
+import type { StudioSettingsView } from "@/lib/server/repo";
 
 type Data = {
   orders: StudioOrder[];
   days: StudioDay[];
-  settings: { defaultCapacity: number; paused: boolean; today: string };
+  settings: StudioSettingsView;
   waitlist: number;
 };
+
+const PAYMENT_LABEL: Record<string, [string, string]> = {
+  method_saved: ["Card saved · not charged", "text-ink-soft"],
+  authorized: ["$15 authorized · capture after upload", "text-ink"],
+  captured: ["$15 captured", "text-sage"],
+  action_required: ["Payment needs the customer — don’t record", "text-clay-deep"],
+  capture_failed: ["Capture failed — retrying", "text-clay-deep"],
+  refunded: ["Refunded", "text-ink-soft"],
+  disputed: ["Disputed — video withheld", "text-clay-deep"],
+  canceled: ["Authorization released", "text-ink-soft"],
+};
+
+const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const MAX_VIDEO_BYTES = 50 * 1024 * 1024;
+
+/** Reads duration and height in the browser so the founder gets a warning before uploading. */
+function probeVideo(file: File): Promise<{ duration: number; height: number } | null> {
+  return new Promise((resolve) => {
+    const v = document.createElement("video");
+    const url = URL.createObjectURL(file);
+    const done = (r: { duration: number; height: number } | null) => {
+      URL.revokeObjectURL(url);
+      resolve(r);
+    };
+    v.preload = "metadata";
+    v.muted = true;
+    v.onloadedmetadata = () => done({ duration: v.duration, height: v.videoHeight });
+    v.onerror = () => done(null);
+    setTimeout(() => done(null), 5000);
+    v.src = url;
+  });
+}
 
 const TABS = [
   { key: "active", label: "To record" },
@@ -31,6 +64,7 @@ const STATUS_STYLE: Record<StudioOrder["status"], string> = {
   booked: "bg-butter text-ink",
   recording: "bg-clay text-card",
   ready: "bg-sage text-card",
+  expired: "bg-ink/10 text-ink-soft",
   canceled: "bg-ink/10 text-ink-soft",
 };
 const STATUS_LABEL: Record<StudioOrder["status"], string> = {
@@ -38,6 +72,7 @@ const STATUS_LABEL: Record<StudioOrder["status"], string> = {
   booked: "Booked",
   recording: "Recording",
   ready: "Uploaded · ready",
+  expired: "Delivered · file removed",
   canceled: "Cancelled",
 };
 
@@ -71,6 +106,19 @@ function OrderCard({ o, today, onChange }: { o: StudioOrder; today: string; onCh
   async function upload(file: File | undefined) {
     if (!file) return;
     setError(null);
+    if (file.size > MAX_VIDEO_BYTES) {
+      setError(`That file is ${(file.size / 1048576).toFixed(0)} MB. The limit is 50 MB — record at 720p, 30–60 seconds.`);
+      return;
+    }
+    const meta = await probeVideo(file);
+    if (meta && (meta.duration > 75 || meta.duration < 15)) {
+      const ok = confirm(`This video is ${Math.round(meta.duration)} seconds. The target is 30–60 seconds. Upload anyway?`);
+      if (!ok) return;
+    }
+    if (meta && meta.height > 1080) {
+      const ok = confirm(`This video is ${meta.height}p. 720p keeps files small and quick to load. Upload anyway?`);
+      if (!ok) return;
+    }
     try {
       const mime = file.type || "video/mp4";
       const { url, path } = await api(`/api/studio/orders/${o.id}/upload-url`, "POST", { mime });
@@ -85,7 +133,8 @@ function OrderCard({ o, today, onChange }: { o: StudioOrder; today: string; onCh
         xhr.onerror = () => reject(new Error("Upload failed — check your connection."));
         xhr.send(file);
       });
-      await api(`/api/studio/orders/${o.id}/finalize`, "POST", { path });
+      const fin = await api(`/api/studio/orders/${o.id}/finalize`, "POST", { path, durationSeconds: meta?.duration });
+      if (!fin.released) setError("Uploaded and verified. The $15 couldn’t be captured, so the video stays hidden until the customer pays — they’ve been asked.");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Upload failed.");
     }
@@ -112,6 +161,9 @@ function OrderCard({ o, today, onChange }: { o: StudioOrder; today: string; onCh
         </div>
       </div>
 
+      {o.paymentStatus !== "none" && PAYMENT_LABEL[o.paymentStatus] && (
+        <p className={`mt-2 text-[0.8rem] font-medium ${PAYMENT_LABEL[o.paymentStatus][1]}`}>{PAYMENT_LABEL[o.paymentStatus][0]}</p>
+      )}
       {o.status === "held" && o.holdExpiresAt && (
         <p className="mt-3 text-[0.85rem] text-ink-soft">
           Waiting for the customer to confirm by {new Date(o.holdExpiresAt).toLocaleString("en-US", { weekday: "short", hour: "numeric", minute: "2-digit" })}. Don’t record yet.
@@ -174,6 +226,19 @@ function OrderCard({ o, today, onChange }: { o: StudioOrder; today: string; onCh
             <Button size="sm" variant="quiet" onClick={() => confirm("Delete the uploaded video and re-record?") && run(() => api(`/api/studio/orders/${o.id}`, "PATCH", { status: "recording" }))} disabled={busy}>
               Re-record
             </Button>
+            {o.paymentStatus === "captured" && (
+              <Button
+                size="sm"
+                variant="quiet"
+                disabled={busy}
+                onClick={() => {
+                  const r = prompt("Refund the full $15? (Test mode.) Reason:", "Goodwill refund");
+                  if (r !== null) run(() => api(`/api/studio/orders/${o.id}/refund`, "POST", { reason: r }));
+                }}
+              >
+                Refund
+              </Button>
+            )}
           </>
         )}
         {(o.status === "booked" || o.status === "recording" || o.status === "held") && (
@@ -191,7 +256,11 @@ function OrderCard({ o, today, onChange }: { o: StudioOrder; today: string; onCh
         )}
         {o.status === "canceled" && <p className="text-[0.85rem] text-ink-faint">{o.canceledReason} · payment {o.paymentStatus.replace("demo_", "demo ")}</p>}
       </div>
-      {o.status === "recording" && <p className="mt-2 text-[0.78rem] text-ink-faint">The customer sees “ready” only after the upload is verified in storage.</p>}
+      {o.status === "recording" && (
+        <p className="mt-2 text-[0.78rem] text-ink-faint">
+          Target: 30–60 seconds, 720p (iPhone: Settings › Camera › Record Video › 720p HD), under 50 MB. The customer sees “ready” only after the upload is verified in storage.
+        </p>
+      )}
       {error && <p className="mt-2 text-[0.85rem] text-clay-deep">{error}</p>}
     </li>
   );
@@ -284,6 +353,59 @@ export function StudioDashboard() {
             Pause new bookings
           </label>
         </div>
+        <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-3 border-t border-line pt-3 text-[0.88rem]">
+          <label className="flex items-center gap-2">
+            Same-day cutoff
+            <select
+              value={settings.cutoffHour}
+              onChange={(e) => api("/api/studio/settings", "PATCH", { cutoffHour: Number(e.target.value) }).then(load, load)}
+              className="rounded-full border border-line bg-card px-3 py-1.5"
+              aria-label="Same-day cutoff"
+            >
+              {Array.from({ length: 25 }, (_, h) => (
+                <option key={h} value={h}>
+                  {h === 0 ? "No same-day" : h === 24 ? "Midnight" : `${h % 12 || 12} ${h < 12 ? "a.m." : "p.m."}`}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex items-center gap-2">
+            Waitlist hold
+            <select
+              value={settings.holdHours}
+              onChange={(e) => api("/api/studio/settings", "PATCH", { holdHours: Number(e.target.value) }).then(load, load)}
+              className="rounded-full border border-line bg-card px-3 py-1.5"
+              aria-label="Waitlist hold length"
+            >
+              {[2, 4, 8, 12, 24].map((h) => (
+                <option key={h} value={h}>{h} hours</option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-1.5 text-[0.82rem]" role="group" aria-label="Recording weekdays">
+          <span className="mr-1 text-[0.88rem]">Recording days</span>
+          {WEEKDAYS.map((w, k) => {
+            const on = settings.weekdays.includes(k + 1);
+            return (
+              <button
+                key={w}
+                aria-pressed={on}
+                onClick={() =>
+                  api("/api/studio/settings", "PATCH", {
+                    weekdays: on ? settings.weekdays.filter((d) => d !== k + 1) : [...settings.weekdays, k + 1],
+                  }).then(load, load)
+                }
+                className={`rounded-full border px-2.5 py-1 ${on ? "border-ink bg-ink text-card" : "border-line text-ink-soft"}`}
+              >
+                {w}
+              </button>
+            );
+          })}
+        </div>
+        <p className="mt-2 text-[0.75rem] text-ink-faint">
+          {settings.timezone.replace("_", " ")} · {settings.windowDays}-day booking window · delivered videos kept {settings.retentionDays} days
+        </p>
         {days.length > 0 && (
           <details className="mt-3 border-t border-line pt-2">
             <summary className="cursor-pointer text-[0.85rem] text-ink-soft">Upcoming recording days</summary>
@@ -322,7 +444,7 @@ export function StudioDashboard() {
       ))}
 
       <p className="mt-10 text-center text-[0.8rem] text-ink-faint">
-        Payments are demo-only: authorized on booking, released if cancelled.{" "}
+        Payments run in Stripe test mode: card saved at booking, $15 authorized when you start recording, captured after upload.{" "}
         <button onClick={signOut} className="underline underline-offset-4">Sign out</button>
       </p>
     </div>

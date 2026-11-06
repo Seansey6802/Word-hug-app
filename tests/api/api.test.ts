@@ -6,6 +6,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { admin, resetData, restoreDefaults, storage } from "../db/helpers.ts";
+import { aal2Token, createUser, founderCookie, passwordToken, signUpAttempt } from "../lib/founder.ts";
+import { bookVideo, buyHug } from "../lib/checkout.ts";
 
 const BASE = process.env.TEST_BASE_URL ?? "http://localhost:3000";
 const MAILPIT = "http://127.0.0.1:54324";
@@ -19,21 +21,16 @@ after(async () => {
   await a.end();
 });
 
-async function createHug(opts: { photo?: boolean; consent?: boolean; forVideo?: boolean; bytes?: Uint8Array; type?: string } = {}) {
-  const fd = new FormData();
-  fd.set("data", JSON.stringify({ forSelf: false, category: "roast", tone: "deadpan", intensity: 2, recipientName: "Maya", senderName: "Jess", photoConsent: opts.consent ?? true, photoForVideo: opts.forVideo ?? false }));
-  if (opts.photo) fd.set("photo", new Blob([(opts.bytes ?? new Uint8Array(JPEG)) as BlobPart], { type: opts.type ?? "image/jpeg" }), "p.jpg");
-  const r = await fetch(`${BASE}/api/hugs`, { method: "POST", body: fd, headers: { "x-forwarded-for": ip() } });
-  return { status: r.status, body: await r.json() };
+/** Hugs are prepaid now: buy one through the (fake) $1 checkout. Validation errors surface as-is. */
+async function createHug(opts: Parameters<typeof buyHug>[0] = {}) {
+  return buyHug(opts);
 }
 
 const owner = (token: string, key: string, path = "", init: RequestInit = {}) =>
   fetch(`${BASE}/api/hugs/${token}${path}`, { ...init, redirect: "manual", headers: { "x-owner-key": key, "content-type": "application/json", ...(init.headers ?? {}) } });
 
 async function studioCookie() {
-  const r = await fetch(`${BASE}/api/studio/session`, { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": ip() }, body: JSON.stringify({ passcode: "demo-studio" }) });
-  assert.equal(r.status, 200);
-  return r.headers.get("set-cookie")!.split(";")[0];
+  return (await founderCookie(BASE, ip())).cookie;
 }
 const studio = (cookie: string, path: string, init: RequestInit = {}) =>
   fetch(`${BASE}/api/studio${path}`, { ...init, redirect: "manual", headers: { cookie, "content-type": "application/json", ...(init.headers ?? {}) } });
@@ -64,7 +61,7 @@ describe("ownership & access control", () => {
       assert.equal((await studio(cookie, "/orders")).status, 401);
       assert.equal((await studio(cookie, "/settings", { method: "PATCH", body: '{"paused":true}' })).status, 401);
     }
-    const bad = await fetch(`${BASE}/api/studio/session`, { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": ip() }, body: '{"passcode":"nope"}' });
+    const bad = await fetch(`${BASE}/api/studio/session`, { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": ip() }, body: '{"accessToken":"not-a-real-token-at-all-xxxxx"}' });
     assert.equal(bad.status, 401);
   });
 
@@ -72,7 +69,7 @@ describe("ownership & access control", () => {
     const who = ip();
     const codes: number[] = [];
     for (let i = 0; i < 12; i++) {
-      const r = await fetch(`${BASE}/api/studio/session`, { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": who }, body: '{"passcode":"guess"}' });
+      const r = await fetch(`${BASE}/api/studio/session`, { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": who }, body: '{"accessToken":"guess-guess-guess-guess-guess"}' });
       codes.push(r.status);
     }
     assert.ok(codes.slice(10).every((c) => c === 429), codes.join(","));
@@ -83,6 +80,55 @@ describe("ownership & access control", () => {
     assert.equal((await studio(cookie, "/orders")).status, 200);
     await studio(cookie, "/session", { method: "DELETE" });
     assert.equal((await studio(cookie, "/orders")).status, 401);
+  });
+});
+
+describe("founder accounts & MFA", () => {
+  const exchange = (accessToken: string) =>
+    fetch(`${BASE}/api/studio/session`, { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": ip() }, body: JSON.stringify({ accessToken }) });
+
+  test("public sign-up is disabled: customers can't create accounts", async () => {
+    assert.ok((await signUpAttempt()) >= 400);
+  });
+
+  test("a staff password alone (no MFA) is refused", async () => {
+    const u = await createUser(true);
+    const r = await exchange(await passwordToken(u.email, u.password));
+    assert.equal(r.status, 403);
+    assert.match((await r.json()).error, /Two-step/);
+  });
+
+  test("an MFA-verified account that isn't staff is refused", async () => {
+    const u = await createUser(false);
+    const { token } = await aal2Token(u.email, u.password);
+    assert.equal((await exchange(token)).status, 403);
+  });
+
+  test("staff + MFA gets in; disabling the person ends their session at once", async () => {
+    const { cookie, user } = await founderCookie(BASE, ip());
+    assert.equal((await studio(cookie, "/orders")).status, 200);
+    await a.query("update app.staff set disabled_at = now() where user_id = $1", [user.id]);
+    assert.equal((await studio(cookie, "/orders")).status, 401);
+  });
+
+  test("customer capabilities never open the studio", async () => {
+    const h = (await createHug()).body;
+    for (const headers of [{ "x-owner-key": h.ownerKey }, { cookie: `wh_studio=${h.ownerKey}` }, { cookie: `wh_studio=${h.token}` }, { authorization: `Bearer ${h.ownerKey}` }] as Record<string, string>[]) {
+      const r = await fetch(`${BASE}/api/studio/orders`, { headers });
+      assert.equal(r.status, 401);
+    }
+    const page = await (await fetch(`${BASE}/studio`)).text();
+    assert.ok(!page.includes("Good to see you"), "studio dashboard rendered without a session");
+    assert.ok(page.includes("Founders only"));
+  });
+
+  test("a tampered or forged token is refused", async () => {
+    const u = await createUser(true);
+    const { token } = await aal2Token(u.email, u.password);
+    const [h, p, sig] = token.split(".");
+    const claims = JSON.parse(Buffer.from(p, "base64url").toString());
+    const forged = `${h}.${Buffer.from(JSON.stringify({ ...claims, sub: "00000000-0000-0000-0000-000000000000" })).toString("base64url")}.${sig}`;
+    assert.equal((await exchange(forged)).status, 401);
   });
 });
 
@@ -137,7 +183,7 @@ describe("photos: consent, privacy, deletion, expiry", () => {
     const cookie = await studioCookie();
     for (const forVideo of [false, true]) {
       const h = (await createHug({ photo: true, forVideo })).body;
-      assert.equal((await owner(h.token, h.ownerKey, "/video", { method: "POST", body: "{}" })).status, 200);
+      assert.equal((await bookVideo(h)).status, 200);
       const id = (await a.query("select o.id from app.video_orders o join app.hugs h on h.id = o.hug_id where h.token = $1", [h.token])).rows[0].id;
       const r = await studio(cookie, `/orders/${id}/photo`);
       assert.equal(r.status, forVideo ? 302 : 404);
@@ -148,8 +194,9 @@ describe("photos: consent, privacy, deletion, expiry", () => {
 describe("video: booking, honesty, delivery", () => {
   test("full founder flow: book → record → signed upload → verified ready → recipient plays it", async () => {
     const h = (await createHug()).body;
-    const booked = await (await owner(h.token, h.ownerKey, "/video", { method: "POST", body: '{"note":"MY-uh"}' })).json();
+    const booked = (await bookVideo(h, "pm_fake_ok", "MY-uh")).body.state;
     assert.equal(booked.video.status, "booked");
+    assert.equal(booked.video.payment, "method_saved"); // card saved, nothing charged
     assert.equal((await owner(h.token, h.ownerKey, "/video", { method: "POST", body: "{}" })).status, 409); // no double booking
     const id = booked.video.id;
     const cookie = await studioCookie();
@@ -191,6 +238,7 @@ describe("video: booking, honesty, delivery", () => {
     await resetData(a);
     await a.query("update app.settings set booking_horizon_days = 1");
     const hugs = await Promise.all(Array.from({ length: 30 }, () => createHug().then((r) => r.body)));
+    // Everyone taps "Book" at once: only 5 can even reach checkout (slots are held during checkout).
     const codes = await Promise.all(hugs.map((h) => owner(h.token, h.ownerKey, "/video", { method: "POST", body: "{}" }).then((r) => r.status)));
     assert.equal(codes.filter((c) => c === 200).length, 5, codes.join(","));
     assert.equal(codes.filter((c) => c === 409).length, 25);
@@ -201,7 +249,7 @@ describe("video: booking, honesty, delivery", () => {
     const wl = await (await owner(late.token, late.ownerKey, "/waitlist", { method: "POST", body: "{}" })).json();
     assert.equal(wl.waitlist.status, "waiting");
     assert.equal(wl.nextAvailable, null);
-    await a.query("update app.settings set booking_horizon_days = 14");
+    await a.query("update app.settings set booking_horizon_days = 7");
   });
 });
 

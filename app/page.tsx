@@ -40,7 +40,7 @@ function CTA({ className = "" }: { className?: string }) {
         <span aria-hidden className="text-xl leading-none">→</span>
       </ButtonLink>
       <p className="mt-3 text-center text-[0.82rem] text-ink-faint sm:text-left">
-        {formatPrice(WRITTEN_PRICE_CENTS)} a hug · free during our preview · ready in about a minute
+        {formatPrice(WRITTEN_PRICE_CENTS)} a hug · ready in about a minute
       </p>
     </div>
   );

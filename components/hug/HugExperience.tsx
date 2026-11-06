@@ -82,6 +82,32 @@ export function HugExperience({ initial, isNew }: { initial: PublicHug; isNew: b
     loadOwner();
   }, [loadOwner]);
 
+  // Back from video checkout: reconcile (same check as the webhook), then clean the URL.
+  useEffect(() => {
+    if (!ownerKey) return;
+    const sp = new URLSearchParams(window.location.search);
+    const vc = sp.get("video_checkout");
+    if (!vc) return;
+    history.replaceState(null, "", window.location.pathname);
+    if (vc === "canceled") {
+      toast.show("Checkout cancelled — nothing was charged.");
+      return;
+    }
+    (async () => {
+      for (let i = 0; i < 10; i++) {
+        const r = await fetch(`/api/hugs/${hug.token}/video`, { method: "POST", headers: { "content-type": "application/json", "x-owner-key": ownerKey }, body: JSON.stringify({ confirm: vc }) });
+        const out = await r.json().catch(() => ({}));
+        if (out.state) setOwner(out.state);
+        if (out.checkout && out.checkout !== "pending") {
+          if (out.checkout === "hold_expired") toast.show("That slot expired before checkout finished. Nothing was charged.");
+          return;
+        }
+        await new Promise((res) => setTimeout(res, 1000));
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ownerKey, hug.token]);
+
   // Gentle polling while a video is in progress.
   useEffect(() => {
     const s = owner?.video?.status;
@@ -218,7 +244,15 @@ export function HugExperience({ initial, isNew }: { initial: PublicHug; isNew: b
             {hug.videoReady && (
               <motion.section initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="mb-6 overflow-hidden rounded-[1.6rem] bg-ink">
                 <video src={`/api/hugs/${hug.token}/video/file`} controls playsInline preload="metadata" className="aspect-[9/16] max-h-[70dvh] w-full bg-ink object-contain" />
-                <p className="px-5 py-3 text-[0.85rem] text-card/75">Recorded by hand for {hug.recipientName || "you"}. Press play.</p>
+                <div className="flex items-center justify-between gap-3 px-5 py-3 text-[0.85rem] text-card/75">
+                  <p>
+                    Recorded by hand for {hug.recipientName || "you"}.
+                    {hug.videoExpiresAt && <> Available until {new Date(hug.videoExpiresAt).toLocaleDateString("en-US", { month: "long", day: "numeric" })}.</>}
+                  </p>
+                  <a href={`/api/hugs/${hug.token}/video/file?download`} className="shrink-0 rounded-full border border-card/25 px-3 py-1.5 text-card">
+                    Download
+                  </a>
+                </div>
               </motion.section>
             )}
 

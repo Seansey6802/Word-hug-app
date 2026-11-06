@@ -46,6 +46,7 @@ export const PRODUCTS: Product[] = [
     amountCents: 800,
     credits: { written: 10 },
     available: false,
+    deferred: true, // bundles stay hidden until approved
   },
   {
     sku: "sub_weekly",

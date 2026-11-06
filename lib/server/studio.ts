@@ -1,36 +1,42 @@
 import { cookies } from "next/headers";
-import { createHash } from "node:crypto";
-import { safeEqual } from "./ids";
-import { checkStudioSession, createStudioSession, revokeStudioSession } from "./repo";
+import { createClient } from "@supabase/supabase-js";
+import { activeStaff, checkStudioSession, createStudioSession, revokeStudioSession } from "./repo";
 
 const COOKIE = "wh_studio";
 
-/**
- * Prototype founder access: a passcode exchanged for a 12-hour, server-side,
- * revocable session (stored hashed in app.studio_sessions). Production should
- * move to Supabase Auth with the founder's email + MFA (see docs/M2-REVIEW.md).
- * Set STUDIO_PASSCODE_SHA256 in production so the passcode itself is never stored.
- */
-export function checkPasscode(input: string) {
-  const hashed = process.env.STUDIO_PASSCODE_SHA256;
-  if (hashed) return safeEqual(createHash("sha256").update(input).digest("hex"), hashed.toLowerCase());
-  const plain = process.env.STUDIO_PASSCODE;
-  if (!plain) return false; // no passcode configured = studio closed
-  // Never accept the published demo passcode on a real deployment.
-  const deployed = process.env.VERCEL_ENV === "production" || !/localhost|127\.0\.0\.1/.test(process.env.APP_URL ?? "");
-  if (deployed && plain === "demo-studio") return false;
-  return safeEqual(input, plain);
+function decodeClaims(jwt: string): Record<string, unknown> | null {
+  try {
+    return JSON.parse(Buffer.from(jwt.split(".")[1] ?? "", "base64url").toString("utf8"));
+  } catch {
+    return null;
+  }
 }
 
-export async function startSession() {
-  const raw = await createStudioSession();
+/**
+ * Founder sign-in. The browser signs in to Supabase Auth with the founder's own
+ * email + password and completes a TOTP challenge (AAL2). It then hands the
+ * access token here once. We verify it with Supabase Auth (signature, expiry,
+ * revocation), require AAL2 and an active app.staff row, and issue our own
+ * 12-hour, revocable, httpOnly studio session bound to that person.
+ */
+export async function exchangeForStudioSession(accessToken: string) {
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) throw new Error("Supabase is not configured.");
+  const { data, error } = await createClient(url, key, { auth: { persistSession: false } }).auth.getUser(accessToken);
+  if (error || !data.user) return { ok: false as const, status: 401, error: "Your sign-in has expired. Please sign in again." };
+  const claims = decodeClaims(accessToken);
+  if (claims?.aal !== "aal2") return { ok: false as const, status: 403, error: "Two-step verification is required for the studio." };
+  if (!(await activeStaff(data.user.id))) return { ok: false as const, status: 403, error: "This account doesn't have studio access." };
+  const raw = await createStudioSession(data.user.id);
   (await cookies()).set(COOKIE, raw, {
     httpOnly: true,
     sameSite: "strict",
-    secure: process.env.NODE_ENV === "production",
+    secure: process.env.NODE_ENV === "production" && !/localhost|127\.0\.0\.1/.test(process.env.APP_URL ?? ""),
     path: "/",
     maxAge: 12 * 3600,
   });
+  return { ok: true as const };
 }
 
 export async function endSession() {
@@ -39,6 +45,11 @@ export async function endSession() {
   jar.delete(COOKIE);
 }
 
-export async function isStudio() {
+/** The signed-in staff member, or null. Customers (owner keys, gift links) never pass this. */
+export async function studioUser() {
   return checkStudioSession((await cookies()).get(COOKIE)?.value);
+}
+
+export async function isStudio() {
+  return Boolean(await studioUser());
 }

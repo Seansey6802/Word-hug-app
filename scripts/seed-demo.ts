@@ -30,7 +30,9 @@ if (existing.rows[0].n > 0) {
       [randomBytes(16).toString("base64url"), createHash("sha256").update(randomBytes(24)).digest("hex"), !d.sender, d.recipient, d.sender,
        d.category, d.tone, d.intensity, d.occasion, [...d.interests], seed, h.headline, h.kicker, h.paragraphs, h.lineIds],
     );
-    await c.query("select * from app.book_video($1, $2)", [rows[0].id, d.note]);
+    // Book like a real customer: reserve, then confirm with a saved (fake, test-only) card.
+    const r = await c.query("select * from app.reserve_video($1, $2)", [rows[0].id, d.note]);
+    await c.query("select app.confirm_video_booking($1, 'fake', 'cus_demo', 'pm_fake_ok', null)", [r.rows[0].order_id]);
   }
   await c.query("update app.video_orders set demo = true where hug_id in (select id from app.hugs where demo)");
   console.log("Seeded 3 fictional demo bookings.");

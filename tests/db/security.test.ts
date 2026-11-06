@@ -1,7 +1,7 @@
 import { after, before, beforeEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
-import { APP_TABLES, PUBLISHABLE, admin, appPool, makeHug, resetData, restoreDefaults, sqlState, storage } from "./helpers.ts";
+import { APP_TABLES, PUBLISHABLE, admin, appPool, makeHug, resetData, restoreDefaults, sqlState, storage , BOOK_SQL, AUTHORIZE_SQL } from "./helpers.ts";
 
 const a = admin();
 const app = appPool(4);
@@ -107,7 +107,7 @@ describe("photo consent and expiry", () => {
 
   test("the founder can see a photo only with the customer's permission", async () => {
     const [hug] = await makeHug(a);
-    await app.query("select * from app.book_video($1, '')", [hug]);
+    await app.query(BOOK_SQL, [hug]);
     const { rows } = await a.query("select id from app.video_orders where hug_id = $1", [hug]);
     await a.query(
       `insert into app.hug_photos (hug_id, storage_path, mime, bytes, consent_at, consent_text, consent_version, allow_for_video, expires_at)
@@ -124,9 +124,10 @@ describe("photo consent and expiry", () => {
 describe("ready requires a real upload", () => {
   test("not even a superuser can mark a video ready without a stored object", async () => {
     const [hug] = await makeHug(a);
-    await app.query("select * from app.book_video($1, '')", [hug]);
+    await app.query(BOOK_SQL, [hug]);
     const { rows } = await a.query("select id from app.video_orders where hug_id = $1", [hug]);
     const id = rows[0].id;
+    await app.query(AUTHORIZE_SQL, [id]);
     await app.query("select app.set_recording($1, true)", [id]);
     // Direct UPDATE as superuser: blocked by the trigger.
     const state = await sqlState(
@@ -145,8 +146,9 @@ describe("ready requires a real upload", () => {
 
   test("a real upload through a signed URL makes it ready", async () => {
     const [hug] = await makeHug(a);
-    await app.query("select * from app.book_video($1, '')", [hug]);
+    await app.query(BOOK_SQL, [hug]);
     const { rows } = await a.query("select id from app.video_orders where hug_id = $1", [hug]);
+    await app.query(AUTHORIZE_SQL, [rows[0].id]);
     await app.query("select app.set_recording($1, true)", [rows[0].id]);
     const s = storage();
     const path = `${randomBytes(12).toString("base64url")}.mp4`;

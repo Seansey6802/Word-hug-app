@@ -17,7 +17,8 @@
     "seed:demo": "node --env-file=.env.local --experimental-strip-types scripts/seed-demo.ts",
     "test:db": "node --env-file=.env.local --experimental-strip-types --test --test-concurrency=1 tests/db/*.test.ts",
     "test:api": "node --env-file=.env.local --experimental-strip-types --test --test-concurrency=1 tests/api/*.test.ts",
-    "test:e2e": "node tests/e2e/run.cjs"
+    "test:e2e": "node --env-file=.env.local tests/e2e/run.cjs",
+    "staff:add": "node --env-file=.env.local --experimental-strip-types scripts/staff-add.ts"
   },
   "dependencies": {
     "@fontsource-variable/fraunces": "^5.3.0",
@@ -27,7 +28,8 @@
     "next": "16.4.5",
     "nodemailer": "^10.3.1",
     "react": "19.3.1",
-    "react-dom": "19.3.1"
+    "react-dom": "19.3.1",
+    "stripe": "^23.0.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.3.4",

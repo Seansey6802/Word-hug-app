@@ -1,6 +1,6 @@
 import { after, beforeEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { admin, appPool, makeHug, resetData, restoreDefaults, sqlState } from "./helpers.ts";
+import { admin, appPool, makeHug, resetData, restoreDefaults, sqlState , BOOK_SQL, AUTHORIZE_SQL } from "./helpers.ts";
 
 const a = admin();
 const app = appPool(30);
@@ -11,7 +11,7 @@ after(async () => {
   await app.end();
 });
 
-const book = (hug: string) => app.query("select * from app.book_video($1, '')", [hug]);
+const book = (hug: string) => app.query(BOOK_SQL, [hug]);
 const active = async () =>
   (await a.query(`select recording_day::text as day, count(*)::int as n from app.video_orders
                    where status <> 'canceled' group by 1 order by 1`)).rows as { day: string; n: number }[];
@@ -97,11 +97,13 @@ describe("no-charge waitlist", () => {
     const [stranger] = await makeHug(a);
     assert.equal(await sqlState(book(stranger)), "WH002");
 
-    await app.query("select * from app.confirm_hold($1)", [w1]);
+    // Confirming = saving a card for the held slot. The order now exists; nothing is charged.
+    const heldId = (await a.query("select id from app.video_orders where hug_id = $1 and status = 'held'", [w1])).rows[0].id;
+    await app.query("select app.confirm_video_booking($1, 'fake', 'cus_w1', 'pm_fake_ok', 'seti_w1')", [heldId]);
     assert.equal((await a.query("select status from app.video_orders where hug_id = $1", [w1])).rows[0].status, "booked");
     const pay = (await a.query("select status, amount_cents from app.payments where hug_id = $1", [w1])).rows[0];
-    assert.deepEqual(pay, { status: "demo_authorized", amount_cents: 1500 });
-    assert.equal((await a.query("select status from app.payments where video_order_id = $1", [victim])).rows[0].status, "demo_refunded");
+    assert.deepEqual(pay, { status: "method_saved", amount_cents: 1500 });
+    assert.equal((await a.query("select status from app.payments where video_order_id = $1", [victim])).rows[0].status, "canceled");
   });
 
   test("an unconfirmed hold expires and passes to the next waiter", async () => {
@@ -114,7 +116,8 @@ describe("no-charge waitlist", () => {
     await app.query("select app.cancel_video($1, 'studio', 'sick day')", [o]);
     await a.query("update app.video_orders set hold_expires_at = now() - interval '1 minute' where hug_id = $1", [w1]);
     assert.equal((await app.query("select app.expire_holds() as n")).rows[0].n, 1);
-    assert.equal(await sqlState(app.query("select * from app.confirm_hold($1)", [w1])), "WH006");
+    const lapsed = (await a.query("select id from app.video_orders where hug_id = $1 order by created_at desc limit 1", [w1])).rows[0].id;
+    assert.equal(await sqlState(app.query("select app.confirm_video_booking($1, 'fake', 'c', 'pm_fake_ok', 's')", [lapsed])), "WH007");
     assert.equal((await a.query("select status from app.video_waitlist where hug_id = $1", [w1])).rows[0].status, "expired");
     assert.equal((await a.query("select status from app.video_orders where hug_id = $1 and status <> 'canceled'", [w2])).rows[0].status, "held");
   });
@@ -125,6 +128,9 @@ describe("lifecycle rules", () => {
     const [h] = await makeHug(a);
     await book(h);
     const id = (await a.query("select id from app.video_orders where hug_id = $1", [h])).rows[0].id;
+    // No $15 authorization yet → recording can't start.
+    assert.equal(await sqlState(app.query("select app.set_recording($1, true)", [id])), "WH009");
+    await app.query(AUTHORIZE_SQL, [id]);
     await app.query("select app.set_recording($1, true)", [id]);
     assert.equal(await sqlState(app.query("select app.cancel_video($1, 'customer', '')", [id])), "WH004");
     assert.equal(await sqlState(app.query("select app.set_recording($1, true)", [id])), "WH004");
@@ -132,15 +138,23 @@ describe("lifecycle rules", () => {
     assert.equal(await sqlState(app.query("select app.set_recording($1, true)", [id])), "WH004");
     // History is recorded for every step.
     const ev = (await a.query("select status::text from app.video_status_events where order_id = $1 order by id", [id])).rows.map((r) => r.status);
-    assert.deepEqual(ev, ["booked", "recording", "canceled"]);
+    assert.deepEqual(ev, ["held", "booked", "recording", "canceled"]);
   });
 
-  test("payments are demo-only and can't carry Stripe ids", async () => {
+  test("no order without a saved card; demo payments are retired; refunds can't exceed the amount", async () => {
     const [h] = await makeHug(a);
-    const st = await sqlState(
-      app.query("insert into app.payments (sku, hug_id, provider, amount_cents, status, stripe_payment_intent_id) values ('hug_written', $1, 'demo', 100, 'demo_free', 'pi_123')", [h]),
-    );
-    assert.equal(st, "23514");
+    const r = (await app.query("select * from app.reserve_video($1, '')", [h])).rows[0];
+    // A reservation is not an order and has no payment.
+    assert.equal((await a.query("select status from app.video_orders where id = $1", [r.order_id])).rows[0].status, "held");
+    assert.equal((await a.query("select * from app.payments where video_order_id = $1", [r.order_id])).rowCount, 0);
+    assert.equal(await sqlState(app.query("select app.confirm_video_booking($1, 'fake', 'c', '', 's')", [r.order_id])), "P0001");
+    assert.equal(await sqlState(app.query("select app.confirm_video_booking($1, 'demo', 'c', 'pm', 's')", [r.order_id])), "P0001");
+    assert.equal(await sqlState(app.query("insert into app.payments (sku, hug_id, provider, amount_cents, status) values ('hug_written', $1, 'demo', 100, 'captured')", [h])), "23514");
+    assert.equal(await sqlState(app.query("insert into app.payments (sku, hug_id, provider, amount_cents, status, refunded_cents) values ('hug_written', $1, 'fake', 100, 'refunded', 200)", [h])), "23514");
+    // Replaying the same confirmation is harmless; a second payment row can't appear.
+    await app.query("select app.confirm_video_booking($1, 'fake', 'c', 'pm_fake_ok', 's1')", [r.order_id]);
+    assert.equal((await app.query("select app.confirm_video_booking($1, 'fake', 'c', 'pm_fake_ok', 's1') as r", [r.order_id])).rows[0].r, "duplicate");
+    assert.equal((await a.query("select * from app.payments where video_order_id = $1", [r.order_id])).rowCount, 1);
     const prices = (await a.query("select sku, amount_cents, available, deferred from app.products order by sku")).rows;
     assert.deepEqual(prices.find((p) => p.sku === "hug_video"), { sku: "hug_video", amount_cents: 1500, available: true, deferred: false });
     assert.ok(prices.filter((p) => p.sku !== "hug_written" && p.sku !== "hug_video").every((p) => p.deferred && !p.available));

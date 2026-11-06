@@ -7,7 +7,7 @@ export type HugContent = {
   lineIds: string[];
 };
 
-export const VIDEO_STATUSES = ["held", "booked", "recording", "ready", "canceled"] as const;
+export const VIDEO_STATUSES = ["held", "booked", "recording", "ready", "expired", "canceled"] as const;
 export type VideoStatus = (typeof VIDEO_STATUSES)[number];
 
 /** What a gift-link viewer is allowed to see. No owner secrets, no internals. */
@@ -22,6 +22,8 @@ export type PublicHug = {
   hasPhoto: boolean;
   /** Recipients only learn that a video is ready — never queue internals. */
   videoReady: boolean;
+  /** When the delivered video stops being available (30-day retention). */
+  videoExpiresAt: string | null;
 };
 
 export type OwnerVideoView = {
@@ -30,6 +32,10 @@ export type OwnerVideoView = {
   recordingDay: string; // YYYY-MM-DD in the studio's timezone
   holdExpiresAt: string | null;
   positionInDay: number | null;
+  videoExpiresAt: string | null;
+  holdKind: "checkout" | "waitlist" | null;
+  /** method_saved | authorized | captured | action_required | capture_failed | refunded | disputed | canceled */
+  payment: string | null;
   note: string;
   canceledReason: string | null;
 };

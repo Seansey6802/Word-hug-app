@@ -20,7 +20,7 @@ import {
   type Tone,
 } from "@/lib/catalog";
 import { compose } from "@/lib/composer/index.ts";
-import { markSeen, saveHug, seenLines } from "@/lib/client/my-hugs";
+import { savePending, seenLines } from "@/lib/client/my-hugs";
 import { preparePhoto } from "@/lib/client/photo";
 import { CONSENT_TEXT, VIDEO_PHOTO_TEXT } from "@/lib/privacy";
 
@@ -109,6 +109,11 @@ export function CreateFlow() {
   const topRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => () => void (photoUrl && URL.revokeObjectURL(photoUrl)), [photoUrl]);
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("checkout") === "canceled") {
+      setError("Checkout was cancelled, so no hug was created and nothing was charged. Start again whenever you like.");
+    }
+  }, []);
 
   const interests = useMemo(
     () => interestsRaw.split(/[,\n]/).map((s) => s.trim()).filter(Boolean).slice(0, 3),
@@ -182,16 +187,9 @@ export function CreateFlow() {
       const res = await fetch("/api/hugs", { method: "POST", body: fd });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? "Something went wrong.");
-      saveHug({
-        token: body.token,
-        ownerKey: body.ownerKey,
-        headline: recipientName ? `A Word Hug for ${recipientName}` : "A Word Hug, just for you",
-        createdAt: new Date().toISOString(),
-        forSelf,
-        recipientName,
-      });
-      markSeen(body.lineIds ?? []);
-      router.push(`/h/${body.token}?new=1`);
+      // The owner key stays on this device while the customer pays.
+      savePending(body.draftId, { ownerKey: body.ownerKey, recipientName, forSelf });
+      window.location.href = body.checkoutUrl;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Something went wrong.");
       setSubmitting(false);
@@ -468,12 +466,9 @@ export function CreateFlow() {
                 </dl>
                 <div className="relative z-10 mt-5 flex items-baseline justify-between rounded-2xl bg-paper px-4 py-3">
                   <span className="font-display text-lg">Written Word Hug</span>
-                  <span className="text-right">
-                    <span className="mr-2 whitespace-nowrap text-ink-faint line-through">$1</span>
-                    <span className="whitespace-nowrap font-medium text-clay">Free in preview</span>
-                  </span>
+                  <span className="whitespace-nowrap font-display text-lg">$1</span>
                 </div>
-                <p className="relative z-10 mt-3 text-[0.78rem] text-ink-faint">No card needed. Nothing is charged during the prototype.</p>
+                <p className="relative z-10 mt-3 text-[0.78rem] text-ink-faint">Paid securely with Stripe before your hug is written. Beta test mode: use test cards only, no real money moves.</p>
               </div>
             </>
           )}
@@ -503,7 +498,7 @@ export function CreateFlow() {
             </Button>
           ) : (
             <Button size="md" onClick={submit} disabled={submitting} className="min-w-[12rem]">
-              {submitting ? "Wrapping…" : "Wrap my Word Hug"}
+              {submitting ? "Opening checkout…" : "Pay $1 & wrap it"}
             </Button>
           )}
         </div>

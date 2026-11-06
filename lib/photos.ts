@@ -2,6 +2,8 @@
 // (Unsplash License: free to use, commercial included, no permission needed).
 // Art direction: candid human connection, stationery and handwritten notes,
 // gifting moments — with only the occasional animal, for humor.
+// Captions must never imply the people pictured use or endorse Word Hug
+// (stock licenses don't include model releases for endorsement).
 // Before launch: confirm each photographer credit on unsplash.com and consider
 // commissioning an original Word Hug shoot.
 
@@ -11,7 +13,7 @@ export const PHOTOS = {
   hero: {
     src: "/photos/hero-friends-laughing.jpg",
     alt: "Three friends in warm late-afternoon light, laughing together mid-conversation.",
-    caption: "Fig. 1 — The exact moment someone read their Word Hug out loud.",
+    caption: "Fig. 1 — Friends, mid-laugh. The good kind.",
     unsplash: "photo-1491438590914-bc09fcaaf77a",
     w: 1800,
     h: 1200,
@@ -56,7 +58,7 @@ export const PHOTOS = {
   table: {
     src: "/photos/friends-table-laughing.jpg",
     alt: "Four friends around a café table, laughing as they watch something on a tablet.",
-    caption: "Playing it twice. Then a third time.",
+    caption: "Some things are better said out loud.",
     unsplash: "photo-1543269865-cbf427effbad",
     w: 1600,
     h: 1067,

@@ -20,7 +20,7 @@ export function SiteFooter() {
       <div className="flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="font-display text-lg text-ink">Sometimes you just need a Word Hug.</p>
-          <p className="mt-1">Prototype preview · Demo data only · Nothing is charged.</p>
+          <p className="mt-1">Private beta · Payments in Stripe test mode — no real charges.</p>
         </div>
         <nav className="flex flex-wrap gap-x-5 gap-y-2">
           <Link href="/pricing" className="hover:text-ink">Pricing</Link>

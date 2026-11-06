@@ -14,7 +14,7 @@ export default function PricingPage() {
           Small prices for <span className="font-wonk">big feelings.</span>
         </h1>
         <p className="mt-4 max-w-lg text-ink-soft">
-          During the preview, written hugs are free and video orders are demo-only. When we launch, payments will be handled securely by Stripe. Subscriptions are coming later.
+          Payments are handled securely by Stripe. During the private beta, checkout runs in Stripe test mode, so no real money moves. Bundles and subscriptions are coming later.
         </p>
         <ul className="mt-10 divide-y divide-line border-y border-line">
           {PRODUCTS.filter((p) => !p.deferred).map((p) => (
@@ -24,11 +24,11 @@ export default function PricingPage() {
                 <p className="mt-1 text-[0.93rem] text-ink-soft">{p.description}</p>
                 {p.kind === "video" && (
                   <p className="mt-1 text-[0.85rem] text-ink-faint">
-                    Up to {DEFAULT_VIDEO_CAPACITY} per recording day. Charged only once your video is recorded and uploaded.
+                    30–60 seconds. Up to {DEFAULT_VIDEO_CAPACITY} per recording day, booked up to 7 days ahead. Charged only once your video is recorded and uploaded. Available to watch and download for 30 days after delivery.
                   </p>
                 )}
                 <p className={`mt-2 text-[0.72rem] font-medium uppercase tracking-[0.18em] ${p.available ? "text-clay" : "text-ink-faint"}`}>
-                  {p.available ? "In the preview" : "Coming soon"}
+                  {p.available ? "Available in the beta" : "Coming soon"}
                 </p>
               </div>
               <p className="shrink-0 font-display text-[1.6rem]">

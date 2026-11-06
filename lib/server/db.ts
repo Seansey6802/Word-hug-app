@@ -54,6 +54,7 @@ const WH: Record<string, string> = {
   WH006: "not_found",
   WH007: "hold_expired",
   WH008: "already_waitlisted",
+  WH009: "payment_not_authorized",
 };
 
 export class AppError extends Error {

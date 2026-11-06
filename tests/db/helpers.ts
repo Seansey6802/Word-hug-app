@@ -19,19 +19,22 @@ export const PUBLISHABLE = "sb_publishable_ACJWlzQHlZjBrEguHvfOxg_3BJgxAaH"; // 
 export const APP_TABLES = [
   "settings", "customers", "recovery_tokens", "hugs", "hug_photos", "recording_days", "video_orders",
   "video_status_events", "video_waitlist", "products", "payments", "stripe_events", "studio_sessions", "rate_limits",
+  "staff", "hug_drafts",
 ];
 
-/** Production defaults (mirror the migration). */
+/** Beta defaults (mirror the migrations). */
 export async function restoreDefaults(a: pg.Pool) {
-  await a.query(`update app.settings set default_daily_capacity = 5, booking_horizon_days = 14, same_day_cutoff_hour = 17,
-                   paused = false, waitlist_hold_hours = 24, timezone = 'America/New_York'`);
+  await a.query(`update app.settings set default_daily_capacity = 5, booking_horizon_days = 7, same_day_cutoff_hour = 17,
+                   paused = false, waitlist_hold_hours = 24, timezone = 'America/Denver',
+                   recording_weekdays = '{1,2,3,4,5}', video_retention_days = 30`);
 }
 
-/** Wipe customer data; same-day bookings allowed so tests don't depend on the clock. */
+/** Wipe customer data. Every weekday enabled and same-day allowed so tests don't depend on the clock. */
 export async function resetData(a: pg.Pool) {
   await a.query(`truncate app.hugs, app.customers, app.recording_days, app.studio_sessions, app.rate_limits, app.stripe_events cascade`);
-  await a.query(`update app.settings set default_daily_capacity = 5, booking_horizon_days = 14, same_day_cutoff_hour = 24,
-                   paused = false, waitlist_hold_hours = 24, timezone = 'America/New_York'`);
+  await a.query(`update app.settings set default_daily_capacity = 5, booking_horizon_days = 7, same_day_cutoff_hour = 24,
+                   paused = false, waitlist_hold_hours = 24, timezone = 'America/Denver',
+                   recording_weekdays = '{1,2,3,4,5,6,7}', video_retention_days = 30`);
 }
 
 export async function makeHug(a: pg.Pool, n = 1) {
@@ -56,3 +59,10 @@ export async function sqlState(p: Promise<unknown>) {
     return (e as { code?: string }).code ?? "error";
   }
 }
+
+/** Book like the app does: reserve a slot, then confirm once a card is saved (fake gateway ids). */
+export const BOOK_SQL = `select app.confirm_video_booking(r.order_id, 'fake', 'cus_test', 'pm_fake_ok', 'seti_test_' || r.order_id) as ok
+                           from app.reserve_video($1, '') r`;
+/** What the app records after a successful off-session $15 authorization. */
+export const AUTHORIZE_SQL = `update app.payments set status = 'authorized', stripe_payment_intent_id = 'pi_test_' || video_order_id
+                               where video_order_id = $1 and status = 'method_saved'`;

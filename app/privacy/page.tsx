@@ -9,9 +9,10 @@ const ITEMS: [string, string][] = [
   ["Owner controls stay on your device", "When you make a hug, a private key is saved on your device. That key — not the gift link — lets you rewrite, order a video, or delete. Recipients can’t delete your hug."],
   ["Photos: consent first, analysis never", "A photo is only stored if you tick the consent box. We never analyze photos, run face recognition, or infer anything about anyone in them — not age, ethnicity, gender, health, or anything else. Your device re-saves the photo before upload, which strips location and camera data."],
   [`Photos delete themselves after ${PHOTO_DAYS} days`, "Or immediately, whenever you press “Delete photo”. Deleting a hug deletes its photo and video too."],
+  ["Videos are kept for 30 days", "A delivered video can be watched and downloaded for 30 days. After that the file is permanently deleted. Download it if you want to keep it."],
   ["The founder sees only what you allow", "If you order a video, the founder sees the hug’s words and your note. They see your photo only if you separately allowed it."],
   ["No ads. No selling data. Ever.", "Word Hug makes money from hugs, not from you."],
-  ["This is a prototype", "Everything is stored on the development machine, uses demonstration data, and charges nothing."],
+  ["Payments", "Card details are handled by Stripe; Word Hug never sees or stores your card number. During the private beta, payments run in Stripe test mode."],
 ];
 
 export default function PrivacyPage() {

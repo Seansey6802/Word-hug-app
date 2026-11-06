@@ -46,6 +46,14 @@ type HugRow = {
   created_at: Date;
 };
 
+/** SQL predicate: a delivered video may only be released once paid (see M3 payments). */
+const RELEASED = "exists (select 1 from app.payments p where p.video_order_id = app.video_orders.id and p.status in ('captured', 'refunded'))";
+
+export type StudioSettingsView = {
+  defaultCapacity: number; paused: boolean; today: string; cutoffHour: number; weekdays: number[];
+  holdHours: number; windowDays: number; timezone: string; retentionDays: number;
+};
+
 const day = (d: Date | string) => (typeof d === "string" ? d.slice(0, 10) : d.toISOString().slice(0, 10));
 
 // ---------------------------------------------------------------- rate limits
@@ -70,25 +78,26 @@ export type CreateHugInput = {
   photo?: { bytes: Uint8Array; consent: boolean; allowForVideo: boolean } | null;
 };
 
-export async function createHug(input: CreateHugInput) {
-  const recipientName = cleanName(input.recipientName);
-  const senderName = input.forSelf ? "" : cleanName(input.senderName);
-  const interests = cleanInterests(input.interests);
-  const seed = Math.floor(Math.random() * 2 ** 31);
-  const content = compose({
+type DraftInput = Omit<CreateHugInput, "photo">;
+
+/**
+ * Step 1 of a prepaid written hug: store the customer's choices as a DRAFT
+ * (not an order) while they pay. The owner key is returned to the device now
+ * and only its hash is stored. Nothing is composed or delivered yet.
+ */
+export async function createDraft(input: CreateHugInput) {
+  const clean: DraftInput = {
+    forSelf: input.forSelf,
     category: input.category,
     tone: input.tone,
     intensity: input.intensity,
-    name: recipientName,
-    interests,
+    recipientName: cleanName(input.recipientName),
+    senderName: input.forSelf ? "" : cleanName(input.senderName),
     occasion: input.occasion,
-    avoid: input.avoid,
-    seed,
-  });
-  const token = newToken();
+    interests: cleanInterests(input.interests),
+    avoid: (input.avoid ?? []).slice(0, 60),
+  };
   const ownerKey = newOwnerKey();
-
-  // Photo: consent is mandatory; type is checked by magic bytes, not by name.
   let photoPath: string | null = null;
   let photoMime: keyof typeof PHOTO_EXT | null = null;
   if (input.photo) {
@@ -99,34 +108,87 @@ export async function createHug(input: CreateHugInput) {
     photoPath = `${newToken()}.${PHOTO_EXT[photoMime]}`;
     await putPhoto(photoPath, input.photo.bytes, photoMime);
   }
-
   try {
-    await tx(async (c) => {
-      const { rows } = await c.query<{ id: string }>(
-        `insert into app.hugs (token, owner_key_hash, for_self, recipient_name, sender_name, category, tone, intensity,
-                               occasion, interests, seed, headline, kicker, paragraphs, line_ids)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) returning id`,
-        [token, hashKey(ownerKey), input.forSelf, recipientName, senderName, input.category, input.tone, input.intensity,
-         input.occasion ?? null, interests, seed, content.headline, content.kicker, content.paragraphs, content.lineIds],
-      );
-      await c.query(
-        `insert into app.payments (sku, hug_id, provider, amount_cents, status)
-         select 'hug_written', $1, 'demo', amount_cents, 'demo_free' from app.products where sku = 'hug_written'`,
-        [rows[0].id],
-      );
-      if (photoPath && photoMime && input.photo) {
-        await c.query(
-          `insert into app.hug_photos (hug_id, storage_path, mime, bytes, consent_at, consent_text, consent_version, allow_for_video, expires_at)
-           values ($1, $2, $3, $4, now(), $5, $6, $7, now() + make_interval(days => $8))`,
-          [rows[0].id, photoPath, photoMime, input.photo.bytes.byteLength, CONSENT_TEXT, CONSENT_VERSION, input.photo.allowForVideo, PHOTO_DAYS],
-        );
-      }
-    });
+    const d = await one<{ id: string }>(
+      `insert into app.hug_drafts (owner_key_hash, input, photo_path, photo_mime, photo_bytes, photo_allow_for_video)
+       values ($1, $2, $3, $4, $5, $6) returning id`,
+      [hashKey(ownerKey), clean, photoPath, photoMime, input.photo?.bytes.byteLength ?? null, Boolean(input.photo?.allowForVideo)],
+    );
+    return { draftId: d!.id, ownerKey, recipientName: clean.recipientName ?? "" };
   } catch (e) {
     await removeObjects(PHOTO_BUCKET, [photoPath]).catch(() => undefined);
     throw e;
   }
-  return { token, ownerKey, lineIds: content.lineIds };
+}
+
+export async function attachDraftCheckout(draftId: string, sessionId: string) {
+  await q("update app.hug_drafts set checkout_session_id = $2 where id = $1 and status = 'pending'", [draftId, sessionId]);
+}
+
+/**
+ * Step 2, only after the $1 payment is confirmed by the gateway: compose and
+ * create the hug, its photo record and the payment record — atomically and
+ * idempotently (webhook retries, the return page and duplicates all converge).
+ */
+export async function finalizeDraft(
+  draftId: string,
+  pay: { provider: "fake" | "stripe"; sessionId: string; paymentIntentId: string | null; customer: string | null; amountCents: number },
+) {
+  return tx(async (c) => {
+    const { rows } = await c.query<{
+      id: string; owner_key_hash: string; input: DraftInput; photo_path: string | null; photo_mime: string | null; photo_bytes: number | null;
+      photo_allow_for_video: boolean; status: string; hug_id: string | null; created_at: Date;
+    }>("select * from app.hug_drafts where id = $1 for update", [draftId]);
+    const d = rows[0];
+    if (!d) throw new AppError("not_found");
+    if (d.status === "paid" && d.hug_id) {
+      const h = await c.query<{ token: string; headline: string }>("select token, headline from app.hugs where id = $1", [d.hug_id]);
+      return { token: h.rows[0].token, headline: h.rows[0].headline, duplicate: true };
+    }
+    if (d.status !== "pending") throw new AppError("draft_closed");
+    const product = await c.query<{ amount_cents: number }>("select amount_cents from app.products where sku = 'hug_written'");
+    if (pay.amountCents < product.rows[0].amount_cents) throw new AppError("underpaid");
+
+    const i = d.input;
+    const seed = Math.floor(Math.random() * 2 ** 31);
+    const content = compose({ category: i.category, tone: i.tone, intensity: i.intensity, name: i.recipientName, interests: i.interests, occasion: i.occasion, avoid: i.avoid, seed });
+    const token = newToken();
+    const h = await c.query<{ id: string }>(
+      `insert into app.hugs (token, owner_key_hash, for_self, recipient_name, sender_name, category, tone, intensity,
+                             occasion, interests, seed, headline, kicker, paragraphs, line_ids)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) returning id`,
+      [token, d.owner_key_hash, i.forSelf, i.recipientName ?? "", i.senderName ?? "", i.category, i.tone, i.intensity,
+       i.occasion ?? null, i.interests ?? [], seed, content.headline, content.kicker, content.paragraphs, content.lineIds],
+    );
+    const hugId = h.rows[0].id;
+    await c.query(
+      `insert into app.payments (sku, hug_id, draft_id, provider, amount_cents, status, stripe_checkout_session_id, stripe_payment_intent_id, stripe_customer_id)
+       values ('hug_written', $1, $2, $3, $4, 'captured', $5, $6, $7)`,
+      [hugId, d.id, pay.provider, pay.amountCents, pay.sessionId, pay.paymentIntentId, pay.customer],
+    );
+    if (d.photo_path && d.photo_mime && d.photo_bytes) {
+      await c.query(
+        `insert into app.hug_photos (hug_id, storage_path, mime, bytes, consent_at, consent_text, consent_version, allow_for_video, expires_at)
+         values ($1, $2, $3, $4, $5::timestamptz, $6, $7, $8, $5::timestamptz + make_interval(days => $9::int))`,
+        [hugId, d.photo_path, d.photo_mime, d.photo_bytes, d.created_at, CONSENT_TEXT, CONSENT_VERSION, d.photo_allow_for_video, PHOTO_DAYS],
+      );
+    }
+    await c.query("update app.hug_drafts set status = 'paid', hug_id = $2 where id = $1", [d.id, hugId]);
+    return { token, headline: content.headline, duplicate: false };
+  });
+}
+
+/** Abandoned or expired checkout: close the draft and delete its photo. */
+export async function closeDraft(draftId: string, status: "expired" | "canceled") {
+  const d = await one<{ photo_path: string | null }>(
+    "update app.hug_drafts set status = $2 where id = $1 and status = 'pending' returning photo_path",
+    [draftId, status],
+  );
+  if (d?.photo_path) await removeObjects(PHOTO_BUCKET, [d.photo_path]).catch(() => undefined);
+}
+
+export async function draftBySession(sessionId: string) {
+  return one<{ id: string; status: string }>("select id, status from app.hug_drafts where checkout_session_id = $1", [sessionId]);
 }
 
 async function hugByToken(token: string) {
@@ -138,9 +200,10 @@ async function hugByToken(token: string) {
 export async function getPublicHug(token: string): Promise<PublicHug | null> {
   const h = await hugByToken(token);
   if (!h) return null;
-  const extra = await one<{ has_photo: boolean; video_ready: boolean }>(
+  const extra = await one<{ has_photo: boolean; video_expires_at: Date | null }>(
     `select exists (select 1 from app.hug_photos where hug_id = $1) as has_photo,
-            exists (select 1 from app.video_orders where hug_id = $1 and status = 'ready') as video_ready`,
+            (select video_expires_at from app.video_orders
+              where hug_id = $1 and status = 'ready' and video_expires_at > now() and ${RELEASED}) as video_expires_at`,
     [h.id],
   );
   return {
@@ -152,7 +215,8 @@ export async function getPublicHug(token: string): Promise<PublicHug | null> {
     category: h.category,
     content: { headline: h.headline, kicker: h.kicker, paragraphs: h.paragraphs },
     hasPhoto: Boolean(extra?.has_photo),
-    videoReady: Boolean(extra?.video_ready),
+    videoReady: Boolean(extra?.video_expires_at),
+    videoExpiresAt: extra?.video_expires_at?.toISOString() ?? null,
   };
 }
 
@@ -167,9 +231,10 @@ export async function ownedHug(token: string, ownerKey: string | null): Promise<
 async function videoView(hugId: string): Promise<OwnerVideoView | null> {
   const v = await one<{
     id: string; status: VideoStatus; recording_day: Date; hold_expires_at: Date | null; note: string;
-    canceled_reason: string | null; pos: number | null;
+    canceled_reason: string | null; pos: number | null; video_expires_at: Date | null; hold_kind: string | null; pay_status: string | null;
   }>(
-    `select o.id, o.status, o.recording_day, o.hold_expires_at, o.note, o.canceled_reason,
+    `select o.id, o.status, o.recording_day, o.hold_expires_at, o.note, o.canceled_reason, o.video_expires_at, o.hold_kind,
+            (select p.status::text from app.payments p where p.video_order_id = o.id) as pay_status,
             case when o.status = 'booked' then (
               select count(*)::int from app.video_orders x
                where x.recording_day = o.recording_day and x.status = 'booked' and x.created_at <= o.created_at)
@@ -185,6 +250,9 @@ async function videoView(hugId: string): Promise<OwnerVideoView | null> {
     recordingDay: day(v.recording_day),
     holdExpiresAt: v.hold_expires_at?.toISOString() ?? null,
     positionInDay: v.pos,
+    videoExpiresAt: v.video_expires_at?.toISOString() ?? null,
+    holdKind: (v.hold_kind as "checkout" | "waitlist" | null) ?? null,
+    payment: v.pay_status,
     note: v.note,
     canceledReason: v.canceled_reason,
   };
@@ -266,14 +334,17 @@ export async function photoLink(token: string) {
   return p ? signedViewUrl(PHOTO_BUCKET, p.storage_path, PHOTO_LINK_SECONDS) : null;
 }
 
-export async function videoLink(token: string) {
+export async function videoLink(token: string, download = false) {
   const h = await hugByToken(token);
   if (!h) return null;
-  const v = await one<{ video_path: string }>(
-    "select video_path from app.video_orders where hug_id = $1 and status = 'ready' and video_path is not null",
+  const v = await one<{ video_path: string; video_mime: string }>(
+    `select video_path, video_mime from app.video_orders
+      where hug_id = $1 and status = 'ready' and video_path is not null and video_expires_at > now() and ${RELEASED}`,
     [h.id],
   );
-  return v ? signedViewUrl(VIDEO_BUCKET, v.video_path, VIDEO_LINK_SECONDS) : null;
+  if (!v) return null;
+  const ext = v.video_mime === "video/quicktime" ? "mov" : v.video_mime === "video/webm" ? "webm" : "mp4";
+  return signedViewUrl(VIDEO_BUCKET, v.video_path, VIDEO_LINK_SECONDS, download ? `word-hug.${ext}` : undefined);
 }
 
 // ---------------------------------------------------------------- video booking
@@ -288,19 +359,14 @@ async function wrap<T>(p: Promise<T>) {
   }
 }
 
-export async function bookVideo(hugId: string, note: string) {
-  await wrap(q("select * from app.book_video($1, $2)", [hugId, note.slice(0, 400)]));
-}
-
 export async function cancelVideoByCustomer(hugId: string) {
-  const v = await one<{ id: string }>("select id from app.video_orders where hug_id = $1 and status <> 'canceled'", [hugId]);
+  const v = await one<{ id: string }>("select id from app.video_orders where hug_id = $1 and status not in ('canceled', 'expired')", [hugId]);
   if (!v) throw new AppError("not_found");
   await wrap(q("select app.cancel_video($1, 'customer', 'Cancelled by you')", [v.id]));
 }
 
 export const joinWaitlist = (hugId: string, note: string) => wrap(q("select app.join_waitlist($1, $2)", [hugId, note.slice(0, 400)]));
 export const leaveWaitlist = (hugId: string) => wrap(q("select app.leave_waitlist($1)", [hugId]));
-export const confirmHold = (hugId: string) => wrap(q("select * from app.confirm_hold($1)", [hugId]));
 
 export async function publicAvailability() {
   const [next, s] = await Promise.all([
@@ -369,23 +435,38 @@ export async function redeemRecoveryToken(raw: string) {
 
 // ---------------------------------------------------------------- studio
 
-export async function createStudioSession() {
+export async function createStudioSession(userId: string) {
   const raw = newToken() + newToken();
-  await q("insert into app.studio_sessions (token_hash, expires_at) values ($1, now() + interval '12 hours')", [hashKey(raw)]);
+  await q(
+    "insert into app.studio_sessions (token_hash, user_id, aal, expires_at) values ($1, $2, 'aal2', now() + interval '12 hours')",
+    [hashKey(raw), userId],
+  );
   return raw;
 }
 
-export async function checkStudioSession(raw: string | undefined) {
-  if (!raw || !/^[A-Za-z0-9_-]{32,128}$/.test(raw)) return false;
-  const r = await one("select 1 from app.studio_sessions where token_hash = $1 and revoked_at is null and expires_at > now()", [hashKey(raw)]);
-  return Boolean(r);
+export type StaffMember = { userId: string; email: string; role: string };
+
+/** Active staff member if this is a live studio session; null otherwise. */
+export async function checkStudioSession(raw: string | undefined): Promise<StaffMember | null> {
+  if (!raw || !/^[A-Za-z0-9_-]{32,128}$/.test(raw)) return null;
+  const r = await one<{ user_id: string; email: string; role: string }>(
+    `select s.user_id, st.email::text, st.role from app.studio_sessions s
+       join app.staff st on st.user_id = s.user_id and st.disabled_at is null
+      where s.token_hash = $1 and s.revoked_at is null and s.expires_at > now()`,
+    [hashKey(raw)],
+  );
+  return r ? { userId: r.user_id, email: r.email, role: r.role } : null;
+}
+
+export async function activeStaff(userId: string) {
+  return one<{ user_id: string }>("select user_id from app.staff where user_id = $1 and disabled_at is null", [userId]);
 }
 
 export async function revokeStudioSession(raw: string | undefined) {
   if (raw) await q("update app.studio_sessions set revoked_at = now() where token_hash = $1", [hashKey(raw)]);
 }
 
-export async function studioOverview(): Promise<{ orders: StudioOrder[]; days: StudioDay[]; settings: { defaultCapacity: number; paused: boolean; today: string }; waitlist: number }> {
+export async function studioOverview(): Promise<{ orders: StudioOrder[]; days: StudioDay[]; settings: StudioSettingsView; waitlist: number }> {
   await q("select app.expire_holds()");
   const rows = await q<{
     id: string; created_at: Date; recording_day: Date; status: VideoStatus; hold_expires_at: Date | null; note: string; demo: boolean;
@@ -411,7 +492,9 @@ export async function studioOverview(): Promise<{ orders: StudioOrder[]; days: S
       `select d.day, d.capacity, d.closed, app.active_count(d.day) as used from app.recording_days d
         where d.day >= app.studio_today() order by d.day limit 14`,
     ),
-    one<{ default_daily_capacity: number; paused: boolean; today: Date }>("select default_daily_capacity, paused, app.studio_today() as today from app.settings"),
+    one<{ default_daily_capacity: number; paused: boolean; today: Date; same_day_cutoff_hour: number; recording_weekdays: number[]; waitlist_hold_hours: number; booking_horizon_days: number; timezone: string; video_retention_days: number }>(
+      "select *, app.studio_today() as today from app.settings",
+    ),
     one<{ n: number }>("select count(*)::int as n from app.video_waitlist where status = 'waiting'"),
   ]);
   return {
@@ -447,6 +530,12 @@ export async function studioOverview(): Promise<{ orders: StudioOrder[]; days: S
       defaultCapacity: settings?.default_daily_capacity ?? 5,
       paused: Boolean(settings?.paused),
       today: settings ? day(settings.today) : "",
+      cutoffHour: settings?.same_day_cutoff_hour ?? 17,
+      weekdays: settings?.recording_weekdays ?? [1, 2, 3, 4, 5],
+      holdHours: settings?.waitlist_hold_hours ?? 24,
+      windowDays: settings?.booking_horizon_days ?? 7,
+      timezone: settings?.timezone ?? "America/Denver",
+      retentionDays: settings?.video_retention_days ?? 30,
     },
     waitlist: wl?.n ?? 0,
   };
@@ -479,10 +568,11 @@ export async function studioUploadUrl(orderId: string, mime: string) {
   return signedUploadUrl(`${newToken()}.${ext}`);
 }
 
-export async function studioFinalize(orderId: string, path: string) {
+export async function studioFinalize(orderId: string, path: string, durationSeconds?: number) {
   assertUuid(orderId);
   if (!/^[A-Za-z0-9_-]+\.(mp4|mov|webm)$/.test(path)) throw new AppError("upload_missing");
-  await wrap(q("select app.mark_video_ready($1, $2)", [orderId, path]));
+  const dur = typeof durationSeconds === "number" && Number.isFinite(durationSeconds) ? Math.min(600, Math.max(0, durationSeconds)) : null;
+  await wrap(q("select app.mark_video_ready($1, $2, $3)", [orderId, path, dur]));
 }
 
 export async function studioPhotoLink(orderId: string) {
@@ -497,9 +587,22 @@ export async function studioVideoLink(orderId: string) {
   return r?.video_path ? signedViewUrl(VIDEO_BUCKET, r.video_path, VIDEO_LINK_SECONDS) : null;
 }
 
-export async function studioSettings(s: { defaultCapacity?: number; paused?: boolean }) {
+export async function studioSettings(s: { defaultCapacity?: number; paused?: boolean; cutoffHour?: number; weekdays?: number[]; holdHours?: number }) {
+  if (typeof s.cutoffHour === "number") {
+    await q("update app.settings set same_day_cutoff_hour = $1, updated_at = now()", [Math.max(0, Math.min(24, Math.round(s.cutoffHour)))]);
+  }
+  if (Array.isArray(s.weekdays)) {
+    const days = [...new Set(s.weekdays.map(Number).filter((d) => Number.isInteger(d) && d >= 1 && d <= 7))].sort();
+    await q("update app.settings set recording_weekdays = $1, updated_at = now()", [days]);
+  }
+  if (typeof s.holdHours === "number") {
+    await q("update app.settings set waitlist_hold_hours = $1, updated_at = now()", [Math.max(1, Math.min(24, Math.round(s.holdHours)))]);
+  }
   if (typeof s.defaultCapacity === "number") {
-    await q("update app.settings set default_daily_capacity = $1, updated_at = now()", [Math.max(0, Math.min(50, Math.round(s.defaultCapacity)))]);
+    const cap = Math.max(0, Math.min(50, Math.round(s.defaultCapacity)));
+    await q("update app.settings set default_daily_capacity = $1, updated_at = now()", [cap]);
+    // Upcoming days follow the new default unless set individually.
+    await q("update app.recording_days set capacity = $1 where not capacity_override and day >= app.studio_today()", [cap]);
   }
   if (typeof s.paused === "boolean") await q("update app.settings set paused = $1, updated_at = now()", [s.paused]);
   // Re-opened or raised capacity may free slots for waitlisted customers.
@@ -510,8 +613,8 @@ export async function studioSetDay(d: string, capacity: number, closed: boolean)
   if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) throw new AppError("bad_day");
   const cap = Math.max(0, Math.min(50, Math.round(capacity)));
   await q(
-    `insert into app.recording_days (day, capacity, closed) values ($1, $2, $3)
-     on conflict (day) do update set capacity = excluded.capacity, closed = excluded.closed`,
+    `insert into app.recording_days (day, capacity, closed, capacity_override) values ($1, $2, $3, true)
+     on conflict (day) do update set capacity = excluded.capacity, closed = excluded.closed, capacity_override = true`,
     [d, cap, closed],
   );
   await q("select app.offer_waitlist()");
@@ -521,7 +624,14 @@ export async function studioSetDay(d: string, capacity: number, closed: boolean)
 
 /** Deletes expired photos (object first, then row), sweeps orphans, expires holds. */
 export async function runMaintenance() {
-  const out = { photosDeleted: 0, orphansDeleted: 0, holdsExpired: 0 };
+  const out = { photosDeleted: 0, videosExpired: 0, orphansDeleted: 0, holdsExpired: 0 };
+  // Delivered videos past their 30-day window: delete the file, then mark expired.
+  const vids = await q<{ order_id: string; video_path: string }>("select * from app.expired_video_paths(200)");
+  for (const v of vids) {
+    await removeObjects(VIDEO_BUCKET, [v.video_path]);
+    await q("select app.mark_video_expired($1)", [v.order_id]);
+    out.videosExpired++;
+  }
   const expired = await q<{ hug_id: string; storage_path: string }>("select * from app.expired_photo_paths(200)");
   for (const p of expired) {
     await removeObjects(PHOTO_BUCKET, [p.storage_path]);

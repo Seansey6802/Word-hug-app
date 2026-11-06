@@ -1,10 +1,11 @@
 import { isCategory, isIntensity, isOccasion, isTone } from "@/lib/catalog";
-import { createHug } from "@/lib/server/repo";
+import { startHugCheckout } from "@/lib/payments/service";
 import { fail, json, limit } from "@/lib/server/http";
 
 export const runtime = "nodejs";
 const MAX_PHOTO = 8 * 1024 * 1024;
 
+/** Starts a $1 checkout. The hug itself is created only once payment is confirmed. */
 export async function POST(req: Request) {
   try {
     await limit(req, "create", 30, 3600);
@@ -21,18 +22,13 @@ export async function POST(req: Request) {
       return json({ error: "Please choose a kind of hug, a tone and an intensity." }, 400);
     }
     if (occasion != null && !isOccasion(occasion)) return json({ error: "Unknown occasion." }, 400);
-
     const photo = form.get("photo");
     let photoInput = null;
     if (photo instanceof File && photo.size > 0) {
       if (photo.size > MAX_PHOTO) return json({ error: "That photo is over 8 MB." }, 400);
-      photoInput = {
-        bytes: new Uint8Array(await photo.arrayBuffer()),
-        consent: data.photoConsent === true,
-        allowForVideo: data.photoForVideo === true,
-      };
+      photoInput = { bytes: new Uint8Array(await photo.arrayBuffer()), consent: data.photoConsent === true, allowForVideo: data.photoForVideo === true };
     }
-    const out = await createHug({
+    const out = await startHugCheckout({
       forSelf: data.forSelf !== false,
       category,
       tone,

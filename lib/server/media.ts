@@ -37,8 +37,8 @@ export async function putPhoto(path: string, bytes: Uint8Array, mime: string) {
   if (error) throw new Error(`Photo upload failed: ${error.message}`);
 }
 
-export async function signedViewUrl(bucket: string, path: string, seconds: number) {
-  const { data, error } = await client().from(bucket).createSignedUrl(path, seconds);
+export async function signedViewUrl(bucket: string, path: string, seconds: number, downloadAs?: string) {
+  const { data, error } = await client().from(bucket).createSignedUrl(path, seconds, downloadAs ? { download: downloadAs } : undefined);
   if (error || !data) throw new Error(`Could not sign media link: ${error?.message}`);
   return publicize(data.signedUrl);
 }

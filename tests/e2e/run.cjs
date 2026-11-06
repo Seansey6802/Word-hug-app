@@ -38,8 +38,61 @@ async function phone() {
   const page = await ctx.newPage();
   page.errors = [];
   page.on("pageerror", (e) => page.errors.push(e.message));
+  page.on("dialog", (d) => d.accept(d.defaultValue() || undefined));
   return page;
 }
+const { createHmac, randomBytes } = require("node:crypto");
+const SB = "http://127.0.0.1:54321";
+
+/** RFC 6238 — what the founder's authenticator app shows. */
+function totp(base32) {
+  const A = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  let bits = "";
+  for (const ch of base32.replace(/=+$/, "").toUpperCase()) bits += A.indexOf(ch).toString(2).padStart(5, "0");
+  const key = Buffer.from(bits.match(/.{8}/g).map((b) => parseInt(b, 2)));
+  const c = Buffer.alloc(8);
+  c.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30000)));
+  const h = createHmac("sha1", key).update(c).digest();
+  const o = h[h.length - 1] & 0xf;
+  return String((h.readUInt32BE(o) & 0x7fffffff) % 1e6).padStart(6, "0");
+}
+
+/** Creates an individual founder account (as `npm run staff:add` does). */
+async function makeFounder() {
+  const email = `founder-${randomBytes(3).toString("hex")}@example.com`;
+  const password = `Studio-${randomBytes(9).toString("base64url")}9a`;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const r = await fetch(`${SB}/auth/v1/admin/users`, { method: "POST", headers: { apikey: key, Authorization: `Bearer ${key}`, "content-type": "application/json" }, body: JSON.stringify({ email, password, email_confirm: true }) });
+  const u = await r.json();
+  await a.query("insert into app.staff (user_id, email) values ($1, $2)", [u.id, email]);
+  return { email, password, secret: null };
+}
+
+/** Completes the local test checkout page (stands in for Stripe Checkout). */
+async function payOnCheckout(page, { card = null, name = "checkout" } = {}) {
+  await page.waitForURL(/\/dev\/checkout\//);
+  await page.getByText(/Test checkout/).waitFor();
+  if (card) await page.locator(`input[value="${card}"]`).check();
+  await shot(page, name);
+  await page.getByRole("button", { name: card ? "Save card" : "Pay" }).click();
+}
+
+/** API-only purchase + booking, for filling slots. */
+async function apiBuyAndBook(i) {
+  const fd = new FormData();
+  fd.set("data", JSON.stringify({ category: "laugh", tone: "playful", intensity: 2 }));
+  const s = await (await fetch(`${BASE}/api/hugs`, { method: "POST", body: fd, headers: { "x-forwarded-for": `10.9.9.${i}` } })).json();
+  const sid = s.checkoutUrl.split("/dev/checkout/")[1];
+  await fetch(`${BASE}/api/dev/checkout`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sessionId: sid, choice: "pay" }) });
+  const c = await (await fetch(`${BASE}/api/checkout/confirm`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sessionId: sid }) })).json();
+  const hdr = { "x-owner-key": s.ownerKey, "content-type": "application/json" };
+  const v = await (await fetch(`${BASE}/api/hugs/${c.token}/video`, { method: "POST", headers: hdr, body: "{}" })).json();
+  const vsid = v.checkoutUrl.split("/dev/checkout/")[1];
+  await fetch(`${BASE}/api/dev/checkout`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sessionId: vsid, choice: "pm_fake_ok" }) });
+  const r = await (await fetch(`${BASE}/api/hugs/${c.token}/video`, { method: "POST", headers: hdr, body: JSON.stringify({ confirm: vsid }) })).json();
+  assert.equal(r.state.video.status, "booked");
+}
+
 const shot = (page, name, full = false) => page.screenshot({ path: path.join(SHOTS, `${name}.png`), fullPage: full });
 
 async function createHug(page, { forSelf = false, kind = /Encourage Me/, photo = false, name = "Maya", from = "Jess" } = {}) {
@@ -60,8 +113,10 @@ async function createHug(page, { forSelf = false, kind = /Encourage Me/, photo =
     await page.getByText(/Also let the person recording/).click();
   }
   await page.getByRole("button", { name: "Continue" }).click();
-  await page.getByRole("button", { name: "Wrap my Word Hug" }).click();
-  await page.waitForURL(/\/h\//);
+  await page.getByText(/\$1/).first().waitFor();
+  await page.getByRole("button", { name: "Pay $1 & wrap it" }).click();
+  await payOnCheckout(page, { name: "02a-checkout-hug" });
+  await page.waitForURL(/\/h\//, { timeout: 20000 });
   return page.url().split("/h/")[1].split(/[?#]/)[0];
 }
 
@@ -70,17 +125,31 @@ async function openEnvelope(page) {
   await page.waitForTimeout(8500);
 }
 
-async function studioLogin(page) {
+let founder;
+async function studioLogin(page, shotName) {
+  founder ??= await makeFounder();
   await page.goto(`${BASE}/studio`);
-  await page.getByPlaceholder("Passcode").fill("demo-studio");
-  await page.getByRole("button", { name: "Enter the studio" }).click();
+  await page.getByPlaceholder("Email").fill(founder.email);
+  await page.getByPlaceholder("Password").fill(founder.password);
+  await page.getByRole("button", { name: "Continue" }).click();
+  if (!founder.secret) {
+    // First sign-in: enroll an authenticator app from the QR code / setup key.
+    await page.getByAltText("Authenticator QR code").waitFor();
+    if (shotName) await shot(page, shotName);
+    founder.secret = (await page.getByText(/^Or enter:/).textContent()).replace("Or enter:", "").trim();
+    await page.getByLabel("Authenticator code").fill(totp(founder.secret));
+    await page.getByRole("button", { name: "Verify and enter" }).click();
+  } else {
+    await page.getByLabel("Authenticator code").fill(totp(founder.secret));
+    await page.getByRole("button", { name: "Enter the studio" }).click();
+  }
   await page.getByText("Good to see you").waitFor();
 }
 
 (async () => {
   await a.query("truncate app.hugs, app.customers, app.recording_days, app.studio_sessions, app.rate_limits cascade");
   // Allow same-day booking so the run doesn't depend on the clock.
-  await a.query("update app.settings set default_daily_capacity = 5, booking_horizon_days = 14, same_day_cutoff_hour = 24, paused = false");
+  await a.query("update app.settings set default_daily_capacity = 5, booking_horizon_days = 7, same_day_cutoff_hour = 24, paused = false, recording_weekdays = '{1,2,3,4,5,6,7}'");
   browser = await chromium.launch();
   let giftToken;
 
@@ -108,7 +177,11 @@ async function studioLogin(page) {
     await p.getByRole("button", { name: /Add a founder video · \$15/ }).click();
     await p.getByPlaceholder(/pronounce/).fill("MY-uh. She'll pretend to hate it.");
     await p.getByRole("button", { name: /Book today · \$15/ }).click();
+    await payOnCheckout(p, { card: "pm_fake_ok", name: "04a-checkout-save-card" });
+    await p.waitForURL(/\/h\//);
+    await openEnvelope(p);
     await p.getByText(/Booked for/).waitFor();
+    await p.getByText(/only after your video is uploaded/).waitFor();
     await p.getByText(/Booked for/).scrollIntoViewIfNeeded();
     await shot(p, "04-booked");
 
@@ -121,10 +194,12 @@ async function studioLogin(page) {
 
   await step("founder records on the phone; the hug shows ready only after upload", async () => {
     const p = await phone();
-    await studioLogin(p);
+    await studioLogin(p, "05a-studio-mfa-setup");
     const card = p.locator("li", { hasText: "For Maya" });
+    await card.getByText("Card saved · not charged").waitFor();
     await card.getByRole("button", { name: "Start recording" }).click();
     await card.getByText("Upload recording").waitFor();
+    await card.getByText(/\$15 authorized/).waitFor();
     // Not ready yet for the recipient:
     const before = await fetch(`${BASE}/api/hugs/${giftToken}/video/file`, { redirect: "manual" });
     assert.equal(before.status, 404);
@@ -133,6 +208,7 @@ async function studioLogin(page) {
     await p.getByRole("button", { name: /Delivered 1/ }).waitFor({ timeout: 20000 });
     await p.getByRole("button", { name: /Delivered 1/ }).click();
     await p.getByText("Uploaded · ready").waitFor();
+    await p.getByText("$15 captured").waitFor();
     await shot(p, "06-studio-delivered");
     const after = await fetch(`${BASE}/api/hugs/${giftToken}/video/file`, { redirect: "manual" });
     assert.equal(after.status, 302);
@@ -154,18 +230,12 @@ async function studioLogin(page) {
 
   await step("when days are full, customers join the free waitlist and get a held slot", async () => {
     await a.query("update app.settings set booking_horizon_days = 1");
-    // Fill today's remaining 4 slots with demo hugs via the API.
-    for (let i = 0; i < 4; i++) {
-      const fd = new FormData();
-      fd.set("data", JSON.stringify({ category: "laugh", tone: "playful", intensity: 2 }));
-      const h = await (await fetch(`${BASE}/api/hugs`, { method: "POST", body: fd, headers: { "x-forwarded-for": `10.9.9.${i}` } })).json();
-      const r = await fetch(`${BASE}/api/hugs/${h.token}/video`, { method: "POST", headers: { "x-owner-key": h.ownerKey, "content-type": "application/json" }, body: "{}" });
-      assert.equal(r.status, 200);
-    }
+    // Fill today's remaining 4 slots with paid, booked demo hugs via the API.
+    for (let i = 0; i < 4; i++) await apiBuyAndBook(i);
     const p = await phone();
     const token = await createHug(p, { forSelf: true, kind: /Make Me Laugh/, name: "Sam" });
     await openEnvelope(p);
-    await p.getByText(/Every recording day in the next two weeks is full/).waitFor();
+    await p.getByText(/Every recording day in the next week is full/).waitFor();
     await p.getByRole("button", { name: "Join the free waitlist" }).click();
     await p.getByRole("button", { name: "Join the free waitlist" }).click();
     await p.getByText(/You’re on the list/).waitFor();
@@ -180,11 +250,48 @@ async function studioLogin(page) {
     await p.getByText(/A slot opened up/).scrollIntoViewIfNeeded();
     await shot(p, "09-held");
     await p.getByRole("button", { name: /Book it · \$15/ }).click();
+    await payOnCheckout(p, { card: "pm_fake_ok", name: "09a-checkout-held" });
+    await p.waitForURL(/\/h\//);
+    await openEnvelope(p);
     await p.getByText(/Booked for/).waitFor();
     const s = (await a.query("select status from app.video_orders o join app.hugs h on h.id = o.hug_id where h.token = $1 and o.status <> 'canceled'", [token])).rows[0];
     assert.equal(s.status, "booked");
-    await a.query("update app.settings set booking_horizon_days = 14");
+    await a.query("update app.settings set booking_horizon_days = 7");
     assert.deepEqual(p.errors, []);
+  });
+
+  await step("a declined card stops recording; the customer fixes it; nothing is charged early", async () => {
+    // Make room today (earlier steps filled it).
+    await a.query("update app.settings set default_daily_capacity = 10");
+    await a.query("update app.recording_days set capacity = 10");
+    const p = await phone();
+    const token = await createHug(p, { forSelf: true, kind: /Flirt With Me/, name: "Lee" });
+    await openEnvelope(p);
+    await p.getByRole("button", { name: /Add a founder video/ }).click();
+    await p.getByRole("button", { name: /Book today · \$15/ }).click();
+    await payOnCheckout(p, { card: "pm_fake_decline_later" });
+    await p.waitForURL(/\/h\//);
+    const s = await phone();
+    await studioLogin(s);
+    const card = s.locator("li", { hasText: "For Lee" });
+    await card.getByRole("button", { name: "Start recording" }).click();
+    await card.getByText(/couldn't be authorized \(insufficient_funds\)/).waitFor();
+    await card.getByText(/needs the customer/).waitFor();
+    await shot(s, "11-studio-payment-blocked");
+    // The customer sees a clear prompt and re-authorizes on-session.
+    await p.reload();
+    await openEnvelope(p);
+    await p.getByText(/Your bank needs you to approve/).waitFor();
+    await p.getByText(/Your bank needs you to approve/).scrollIntoViewIfNeeded();
+    await shot(p, "12-customer-update-payment");
+    await p.getByRole("button", { name: "Update payment" }).click();
+    await payOnCheckout(p);
+    await p.waitForURL(/\/h\//);
+    await new Promise((r) => setTimeout(r, 1500));
+    const pay = (await a.query("select p.status::text from app.payments p join app.video_orders o on o.id = p.video_order_id join app.hugs h on h.id = o.hug_id where h.token = $1", [token])).rows[0];
+    assert.equal(pay.status, "authorized");
+    assert.deepEqual(p.errors, []);
+    assert.deepEqual(s.errors, []);
   });
 
   await step("recovering hugs on a new phone by email", async () => {
@@ -221,7 +328,6 @@ async function studioLogin(page) {
     await p.getByRole("link", { name: /A Word Hug for Maya/ }).click();
     await openEnvelope(p);
     await p.getByText("Privacy & deletion").click();
-    p.on("dialog", (d) => d.accept());
     await p.getByRole("button", { name: "Delete this hug" }).click();
     await p.waitForURL(/\/saved\?deleted=1/);
     await p.getByText(/gone for good/).waitFor();
@@ -231,7 +337,7 @@ async function studioLogin(page) {
   });
 
   await browser.close();
-  await a.query("update app.settings set same_day_cutoff_hour = 17, booking_horizon_days = 14");
+  await a.query("update app.settings set same_day_cutoff_hour = 17, booking_horizon_days = 7, recording_weekdays = '{1,2,3,4,5}', default_daily_capacity = 5");
   await a.end();
   const failed = results.filter((r) => !r.ok);
   console.log(`\n# pass ${results.length - failed.length}\n# fail ${failed.length}\nScreenshots: ${SHOTS}`);
